@@ -1,0 +1,11 @@
+[package]
+name = "voidhunter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13.1", features = ["tokio"] }
+image = "0.25.6"
+tesseract = "0.15.2"
+windows-capture = "1.4.4"
+
