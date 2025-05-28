@@ -1,13 +1,11 @@
-use image::codecs::png::PngEncoder;
 use std::time::{Duration, Instant};
-use tesseract::Tesseract;
 
-use iced::widget::text;
+use iced::widget::{text, Column, Row};
 use iced::{time, Color, Element, Subscription, Task};
 
 mod capture;
-use capture::capture;
-use image::{ExtendedColorType, GenericImage, ImageEncoder, RgbaImage};
+use capture::{capture, get_characters, get_timer};
+use image::RgbaImage;
 
 fn main() {
     iced::application("hello world", App::update, App::view)
@@ -17,6 +15,7 @@ fn main() {
             (
                 App {
                     content: String::new(),
+                    characters: None,
                 },
                 Task::none(),
             )
@@ -31,6 +30,7 @@ enum Message {
 
 struct App {
     content: String,
+    characters: Option<Vec<String>>,
 }
 
 impl App {
@@ -41,35 +41,47 @@ impl App {
                 println!("Scanning");
                 let image_buf = capture();
                 let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
-                // let mut image = image.to_luma8();
 
-                let timer = image.sub_image(450, 630, 150, 33).to_image();
+                let timer = get_timer(&mut image);
+                let characters = get_characters(&mut image);
 
-                // -----------------------------------
-                //           Only for debug
-                let path = format!("timer.png");
-                timer.save(path).unwrap();
-                // -----------------------------------
-
-                let mut timer_png_bytes = vec![];
-                let png_encoder = PngEncoder::new(&mut timer_png_bytes);
-                png_encoder
-                    .write_image(timer.as_raw(), 150, 33, ExtendedColorType::Rgba8)
-                    .unwrap();
-
-                let content =
-                    Tesseract::new(Some("C:/Program Files/Tesseract-OCR/tessdata"), Some("eng"))
-                        .unwrap();
-                let mut content = content.set_image_from_mem(&timer_png_bytes).unwrap();
-                let content = content.get_text();
-                self.content = content.unwrap();
+                if let Some((h, m, s)) = timer {
+                    self.content = format!("{}:{}:{}", h, m, s);
+                }
+                self.characters = Some(characters);
             }
         };
         Task::none()
     }
 
     pub fn view(&self) -> Element<Message> {
-        text(&self.content).size(20).color(Color::WHITE).into()
+        let col_content = Column::new();
+        let timer_str = if self.content.len() == 0 {
+            "No timer on the screen"
+        } else {
+            self.content.as_str()
+        };
+
+        let timer = text(timer_str).size(20).color(Color::WHITE);
+
+        let col_content = col_content.push(timer);
+
+        let col_content = if self.characters.is_some() {
+            let row = Row::from_iter(
+                self.characters
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|c| text(c).size(20).color(Color::WHITE).into()),
+            )
+            .spacing(20);
+
+            col_content.push(row)
+        } else {
+            col_content
+        };
+
+        col_content.spacing(20).into()
     }
 
     pub fn subscribtion(&self) -> Subscription<Message> {
