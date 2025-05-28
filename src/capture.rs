@@ -4,87 +4,48 @@ use std::{
     time::Duration,
 };
 
+use image::{
+    codecs::png::PngEncoder, ExtendedColorType, GenericImage, ImageBuffer, ImageEncoder, Rgba,
+};
+use tesseract::Tesseract;
 use windows_capture::{
     capture::{Context, GraphicsCaptureApiHandler},
-    encoder,
-    frame::{Frame, ImageFormat},
+    frame::Frame,
     graphics_capture_api::InternalCaptureControl,
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
     window::Window,
 };
 
 pub struct Capture {
-    buffer: Vec<u8>,
-    encoder: encoder::ImageEncoder,
     rx: Sender<Vec<u8>>,
 }
 
 impl GraphicsCaptureApiHandler for Capture {
-    // The type of flags used to get the values from the settings.
     type Flags = Sender<Vec<u8>>;
 
-    // The type of error that can be returned from `CaptureControl` and `start` functions.
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
-    // Function that will be called to create a new instance. The flags can be passed from settings.
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        let encoder = encoder::ImageEncoder::new(ImageFormat::Png, ColorFormat::Rgba8);
         let rx = ctx.flags;
-        Ok(Capture {
-            buffer: vec![],
-            encoder,
-            rx,
-        })
+        Ok(Capture { rx })
     }
 
-    // Called every time a new frame is available.
     fn on_frame_arrived(
         &mut self,
         frame: &mut Frame,
         capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         io::stdout().flush()?;
-
-        // let start_w = 450;
-        // let start_h = 630;
-        // let end_w = 600;
-        // let end_h = 666;
-
-        // let mut frame = frame.buffer_crop(start_w, start_h, end_w, end_h).unwrap();
-        // frame.save_as_image("scn.png", ImageFormat::Png).unwrap();
         self.rx
             .send(frame.buffer().unwrap().as_raw_buffer().to_vec())
             .unwrap();
-        // let img = RgbImage::from_vec(
-        //     end_w - start_w,
-        //     end_h - start_h,
-        //     frame.as_raw_buffer().to_vec(),
-        // )
-        // .unwrap();
-        // let w = frame.width();
-        // let h = frame.height();
-        // self.encoder.as_mut().unwrap().encode(&frame.save_as_image(path, format), w, h);
-
-        // Note: The frame has other uses too, for example, you can save a single frame to a file, like this:
-        // frame.save_as_image("frame.png", ImageFormat::Png)?;
-        // Or get the raw data like this so you have full control:
-        // let data = frame.buffer()?;
         capture_control.stop();
-
-        Ok(())
-    }
-
-    // Optional handler called when the capture item (usually a window) closes.
-    fn on_closed(&mut self) -> Result<(), Self::Error> {
-        println!("Capture session ended");
 
         Ok(())
     }
 }
 
 pub fn capture() -> Vec<u8> {
-    // Gets the foreground window, refer to the docs for other capture items
-    // let primary_monitor = Monitor::primary().expect("There is no primary monitor");
     let window = Window::from_name("ZenlessZoneZero").unwrap();
 
     let (rx, tx) = std::sync::mpsc::channel();
@@ -102,8 +63,6 @@ pub fn capture() -> Vec<u8> {
         rx,
     );
 
-    // Starts the capture and takes control of the current thread.
-    // The errors from handler trait will end up here
     Capture::start_free_threaded(settings).expect("Screen capture failed");
     let res = tx.recv_timeout(Duration::from_secs(1));
     match res {
@@ -112,16 +71,117 @@ pub fn capture() -> Vec<u8> {
     }
 }
 
+pub fn get_timer(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Option<(u32, u32, u32)> {
+    const X_OFFSET: u32 = 450;
+    const Y_OFFSET: u32 = 630;
+    const WIDTH: u32 = 150;
+    const HEIGHT: u32 = 33;
+
+    let timer = image
+        .sub_image(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT)
+        .to_image();
+
+    let mut timer_png_bytes = Vec::new();
+
+    let png_encoder = PngEncoder::new(&mut timer_png_bytes);
+    png_encoder
+        .write_image(timer.as_raw(), WIDTH, HEIGHT, ExtendedColorType::Rgba8)
+        .unwrap();
+
+    let tesseract =
+        Tesseract::new(Some("C:/Program Files/Tesseract-OCR/tessdata"), Some("eng")).unwrap();
+
+    let timer_str = tesseract
+        .set_image_from_mem(&timer_png_bytes)
+        .unwrap()
+        .get_text()
+        .unwrap();
+
+    let mut iter = timer_str.split(':');
+    let h = iter.next()?.parse::<u32>().ok()?;
+    let m = iter.next()?.parse::<u32>().ok()?;
+    let s = iter.next()?.parse::<u32>().ok()?;
+
+    Some((h, m, s))
+}
+
+pub fn get_characters(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String> {
+    const H1: u32 = 454;
+    const H2: u32 = 902;
+
+    const X1: u32 = 372;
+    const X2: u32 = 846;
+    const X3: u32 = 1321;
+
+    const DIFF: u32 = 132;
+
+    const WIDTH: u32 = 184;
+    const HEIGHT: u32 = 33;
+
+    let char_pos = vec![
+        (X1, H1),
+        (X2, H1),
+        (X3, H1),
+        (X1 - DIFF, H2),
+        (X2 - DIFF, H2),
+        (X3 - DIFF, H2),
+    ];
+
+    let mut agent_names = Vec::new();
+    let mut buffer = Vec::new();
+
+    for (x, y) in char_pos.into_iter() {
+        let agent_image = image.sub_image(x, y, WIDTH, HEIGHT).to_image();
+        agent_image.save(format!("char-{}.png", x)).unwrap();
+
+        let png_encoder = PngEncoder::new(&mut buffer);
+        png_encoder
+            .write_image(
+                agent_image.as_raw(),
+                WIDTH,
+                HEIGHT,
+                ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+
+        let tesseract =
+            Tesseract::new(Some("C:/Program Files/Tesseract-OCR/tessdata"), Some("eng")).unwrap();
+
+        let agent = tesseract
+            .set_image_from_mem(&buffer)
+            .unwrap()
+            .get_text()
+            .unwrap()
+            .trim()
+            .to_string();
+
+        agent_names.push(agent);
+        buffer.clear();
+    }
+
+    agent_names
+}
+
 #[cfg(test)]
 mod tests {
     use std::{process::Command, time::Duration};
 
     use image::RgbaImage;
     use windows_capture::{
-        capture::GraphicsCaptureApiHandler, settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings}, window::Window
+        capture::GraphicsCaptureApiHandler,
+        settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
+        window::Window,
     };
 
-    use super::Capture;
+    use super::{capture, get_characters, Capture};
+
+    #[test]
+    fn chars() {
+        let image_buf = capture();
+        let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
+        let agents = get_characters(&mut image);
+        println!("{agents:#?}");
+    }
 
     #[test]
     fn cap() {
@@ -152,7 +212,7 @@ mod tests {
             Ok(buf) => {
                 let img = RgbaImage::from_vec(1920, 1080, buf).unwrap();
                 img.save("Atest.png").unwrap();
-            },
+            }
             Err(_) => {}
         };
     }
