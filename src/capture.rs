@@ -1,7 +1,6 @@
 use std::{
     io::{self, Write},
-    sync::mpsc::Sender,
-    time::Duration,
+    sync::{Arc, Mutex},
 };
 
 use image::{
@@ -17,38 +16,38 @@ use windows_capture::{
 };
 
 pub struct Capture {
-    rx: Sender<Vec<u8>>,
+    buf: Arc<Mutex<Vec<u8>>>,
 }
 
 impl GraphicsCaptureApiHandler for Capture {
-    type Flags = Sender<Vec<u8>>;
+    type Flags = Arc<Mutex<Vec<u8>>>;
 
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        let rx = ctx.flags;
-        Ok(Capture { rx })
+        let buf = ctx.flags;
+        Ok(Capture { buf })
     }
 
     fn on_frame_arrived(
         &mut self,
         frame: &mut Frame,
-        capture_control: InternalCaptureControl,
+        _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         io::stdout().flush()?;
-        self.rx
-            .send(frame.buffer().unwrap().as_raw_buffer().to_vec())
-            .unwrap();
-        capture_control.stop();
+        let mut frame_buf = frame.buffer().unwrap();
+        let buf = frame_buf.as_raw_buffer();
+
+        let mut curr_buf = self.buf.lock().unwrap();
+        curr_buf.clear();
+        curr_buf.write(buf).unwrap();
 
         Ok(())
     }
 }
 
-pub fn capture() -> Vec<u8> {
+pub fn capture(buf: Arc<Mutex<Vec<u8>>>) {
     let window = Window::from_name("ZenlessZoneZero").unwrap();
-
-    let (rx, tx) = std::sync::mpsc::channel();
 
     let settings = Settings::new(
         // Item to capture
@@ -60,15 +59,10 @@ pub fn capture() -> Vec<u8> {
         // The desired color format for the captured frame.
         ColorFormat::Rgba8,
         // Additional flags for the capture settings that will be passed to user defined `new` function.
-        rx,
+        buf.clone(),
     );
 
     Capture::start_free_threaded(settings).expect("Screen capture failed");
-    let res = tx.recv_timeout(Duration::from_secs(1));
-    match res {
-        Ok(buf) => buf,
-        Err(_) => vec![],
-    }
 }
 
 pub fn get_timer(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Option<(u32, u32, u32)> {
@@ -115,7 +109,7 @@ pub fn get_characters(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String>
 
     const DIFF: u32 = 132;
 
-    const WIDTH: u32 = 184;
+    const WIDTH: u32 = 190;
     const HEIGHT: u32 = 33;
 
     let char_pos = vec![
@@ -164,57 +158,14 @@ pub fn get_characters(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use std::{process::Command, time::Duration};
-
-    use image::RgbaImage;
-    use windows_capture::{
-        capture::GraphicsCaptureApiHandler,
-        settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
-        window::Window,
-    };
-
-    use super::{capture, get_characters, Capture};
+    use std::process::Command;
 
     #[test]
     fn chars() {
-        let image_buf = capture();
-        let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
-        let agents = get_characters(&mut image);
-        println!("{agents:#?}");
-    }
-
-    #[test]
-    fn cap() {
-        // Gets the foreground window, refer to the docs for other capture items
-        // let primary_monitor = Monitor::primary().expect("There is no primary monitor");
-        let window = Window::from_name("ZenlessZoneZero").unwrap();
-
-        let (rx, tx) = std::sync::mpsc::channel();
-
-        let settings = Settings::new(
-            // Item to capture
-            window,
-            // Capture cursor settings
-            CursorCaptureSettings::Default,
-            // Draw border settings
-            DrawBorderSettings::WithoutBorder,
-            // The desired color format for the captured frame.
-            ColorFormat::Rgba8,
-            // Additional flags for the capture settings that will be passed to user defined `new` function.
-            rx,
-        );
-
-        // Starts the capture and takes control of the current thread.
-        // The errors from handler trait will end up here
-        Capture::start(settings).expect("Screen capture failed");
-        let res = tx.recv_timeout(Duration::from_secs(2));
-        match res {
-            Ok(buf) => {
-                let img = RgbaImage::from_vec(1920, 1080, buf).unwrap();
-                img.save("Atest.png").unwrap();
-            }
-            Err(_) => {}
-        };
+        // let image_buf = capture();
+        // let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
+        // let agents = get_characters(&mut image);
+        // println!("{agents:#?}");
     }
 
     #[test]

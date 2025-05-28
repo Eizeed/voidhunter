@@ -7,5 +7,6 @@ edition = "2021"
 iced = { version = "0.13.1", features = ["tokio"] }
 image = "0.25.6"
 tesseract = "0.15.2"
+tokio = { version = "1.45.1", features = ["rt", "fs", "time"] }
 windows-capture = "1.4.4"
 
