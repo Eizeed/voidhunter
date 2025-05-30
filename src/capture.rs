@@ -46,25 +46,31 @@ impl GraphicsCaptureApiHandler for Capture {
     }
 }
 
-pub fn capture(buf: Arc<Mutex<Vec<u8>>>) {
-    let window = Window::from_name("ZenlessZoneZero").unwrap();
+pub fn capture(buf: Arc<Mutex<Vec<u8>>>) -> Result<(), CaptureError> {
+    let window = Window::from_name("ZenlessZoneZero");
+
+    let Ok(window) = window else {
+        return Err(CaptureError::NotFound);
+    };
 
     let settings = Settings::new(
-        // Item to capture
         window,
-        // Capture cursor settings
         CursorCaptureSettings::Default,
-        // Draw border settings
         DrawBorderSettings::WithoutBorder,
-        // The desired color format for the captured frame.
         ColorFormat::Rgba8,
-        // Additional flags for the capture settings that will be passed to user defined `new` function.
         buf.clone(),
     );
 
-    Capture::start_free_threaded(settings).expect("Screen capture failed");
+    Capture::start_free_threaded(settings).map_err(|_| CaptureError::NotFound)?;
+    Ok(())
 }
 
+#[derive(Debug)]
+pub enum CaptureError {
+    NotFound,
+}
+
+#[allow(dead_code)]
 pub fn get_timer(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Option<(u32, u32, u32)> {
     const X_OFFSET: u32 = 450;
     const Y_OFFSET: u32 = 630;
@@ -99,62 +105,6 @@ pub fn get_timer(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Option<(u32, u32
     Some((h, m, s))
 }
 
-pub fn get_characters(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String> {
-    const H1: u32 = 454;
-    const H2: u32 = 902;
-
-    const X1: u32 = 372;
-    const X2: u32 = 846;
-    const X3: u32 = 1321;
-
-    const DIFF: u32 = 132;
-
-    const WIDTH: u32 = 190;
-    const HEIGHT: u32 = 33;
-
-    let char_pos = vec![
-        (X1, H1),
-        (X2, H1),
-        (X3, H1),
-        (X1 - DIFF, H2),
-        (X2 - DIFF, H2),
-        (X3 - DIFF, H2),
-    ];
-
-    let mut agent_names = Vec::new();
-    let mut buffer = Vec::new();
-
-    for (x, y) in char_pos.into_iter() {
-        let agent_image = image.sub_image(x, y, WIDTH, HEIGHT).to_image();
-        agent_image.save(format!("char-{}.png", x)).unwrap();
-
-        let png_encoder = PngEncoder::new(&mut buffer);
-        png_encoder
-            .write_image(
-                agent_image.as_raw(),
-                WIDTH,
-                HEIGHT,
-                ExtendedColorType::Rgba8,
-            )
-            .unwrap();
-
-        let tesseract =
-            Tesseract::new(Some("C:/Program Files/Tesseract-OCR/tessdata"), Some("eng")).unwrap();
-
-        let agent = tesseract
-            .set_image_from_mem(&buffer)
-            .unwrap()
-            .get_text()
-            .unwrap()
-            .trim()
-            .to_string();
-
-        agent_names.push(agent);
-        buffer.clear();
-    }
-
-    agent_names
-}
 
 #[cfg(test)]
 mod tests {
