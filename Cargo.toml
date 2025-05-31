@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.13.1", features = ["tokio"] }
+futures = "0.3.31"
+iced = { git = "https://github.com/iced-rs/iced", rev = "7afbb89ebfd49aa86453d45f7d9c13a7c48b58f2", features = ["tokio"] }
 image = "0.25.6"
 imageproc = "0.25.0"
 tesseract = "0.15.2"

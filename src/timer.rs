@@ -1,7 +1,7 @@
 use image::{
     codecs::png::PngEncoder,
     imageops::{contrast, grayscale},
-    ExtendedColorType, GenericImage, GenericImageView, ImageBuffer, ImageEncoder, Luma, Rgba,
+    ExtendedColorType, GenericImage, ImageBuffer, ImageEncoder, Luma, Rgba,
 };
 use tesseract::Tesseract;
 
@@ -30,7 +30,7 @@ impl Timer {
         self.hours * 60 * 60 + self.minutes * 60 + self.seconds
     }
 
-    pub fn to_string(self) -> String {
+    pub fn to_string(&self) -> String {
         format!("{:02}:{:02}:{:02}", self.hours, self.minutes, self.seconds)
     }
 }
