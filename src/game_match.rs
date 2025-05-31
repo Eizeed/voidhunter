@@ -4,7 +4,7 @@ use std::{
 };
 
 use iced::{
-    alignment::{Horizontal, Vertical},
+    alignment::Horizontal,
     time,
     widget::{button, column, text, Column, Row},
     Color, Element, Length, Subscription, Task,
@@ -44,12 +44,6 @@ pub enum Stage {
     Timer,
     Finished,
     GameOver,
-}
-
-#[derive(Debug, Clone)]
-pub enum Round {
-    First,
-    Second,
 }
 
 pub struct GameMatch {
