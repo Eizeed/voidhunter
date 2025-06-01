@@ -1,11 +1,11 @@
 use image::{
     codecs::png::PngEncoder,
     imageops::{contrast, grayscale},
-    ExtendedColorType, GenericImage, ImageBuffer, ImageEncoder, Luma, Rgba,
+    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Luma, Rgba,
 };
 use tesseract::Tesseract;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timer {
     hours: u16,
     minutes: u16,
@@ -38,15 +38,13 @@ impl Timer {
 pub struct RunStage;
 
 impl RunStage {
-    pub fn get_timer_ocr(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
+    pub fn get_timer_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
         const X_OFFSET: u32 = 1634;
         const Y_OFFSET: u32 = 82;
         const WIDTH: u32 = 126;
         const HEIGHT: u32 = 21;
 
-        let timer = image
-            .sub_image(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT)
-            .to_image();
+        let timer = image.view(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT).to_image();
 
         let timer = &contrast(&grayscale(&timer), 200.0);
         // timer.pixels()
@@ -82,12 +80,12 @@ impl RunStage {
 
                     if let Some(left_x) = x.checked_sub(2) {
                         if image.get_pixel(left_x, y).0[0] > 0 {
-                            println!(
-                                "Pixel: {}, x: {}, y:{}",
-                                image.get_pixel(left_x, y).0[0],
-                                left_x,
-                                y
-                            );
+                            // println!(
+                            //     "Pixel: {}, x: {}, y:{}",
+                            //     image.get_pixel(left_x, y).0[0],
+                            //     left_x,
+                            //     y
+                            // );
                             return String::new();
                         }
                     }
@@ -107,24 +105,24 @@ impl RunStage {
 
                     if let Some(top_y) = y.checked_sub(2) {
                         if image.get_pixel(x, top_y).0[0] > 0 {
-                            println!(
-                                "Pixel: {}, x: {}, y:{}",
-                                image.get_pixel(x, top_y).0[0],
-                                x,
-                                top_y,
-                            );
+                            // println!(
+                            //     "Pixel: {}, x: {}, y:{}",
+                            //     image.get_pixel(x, top_y).0[0],
+                            //     x,
+                            //     top_y,
+                            // );
                             return String::new();
                         }
                     }
 
                     if y + 2 <= 20 {
                         if image.get_pixel(x, y + 2).0[0] > 0 {
-                            println!(
-                                "Pixel: {}, x: {}, y:{}",
-                                image.get_pixel(x, y + 2).0[0],
-                                x,
-                                y + 2
-                            );
+                            // println!(
+                            //     "Pixel: {}, x: {}, y:{}",
+                            //     image.get_pixel(x, y + 2).0[0],
+                            //     x,
+                            //     y + 2
+                            // );
                             return String::new();
                         }
                     }
@@ -140,12 +138,12 @@ impl RunStage {
 
                     if x + 2 <= 125 {
                         if image.get_pixel(x + 2, y).0[0] > 0 {
-                            println!(
-                                "Pixel: {}, x: {}, y:{}",
-                                image.get_pixel(x + 2, y).0[0],
-                                x + 2,
-                                y
-                            );
+                            // println!(
+                            //     "Pixel: {}, x: {}, y:{}",
+                            //     image.get_pixel(x + 2, y).0[0],
+                            //     x + 2,
+                            //     y
+                            // );
                             return String::new();
                         }
                     }
@@ -182,15 +180,13 @@ impl RunStage {
 pub struct TimerStage;
 
 impl TimerStage {
-    pub fn get_timer_ocr(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
+    pub fn get_timer_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
         const X_OFFSET: u32 = 450;
         const Y_OFFSET: u32 = 630;
         const WIDTH: u32 = 150;
         const HEIGHT: u32 = 33;
 
-        let timer = image
-            .sub_image(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT)
-            .to_image();
+        let timer = image.view(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT).to_image();
 
         let mut timer_png_bytes = Vec::new();
 

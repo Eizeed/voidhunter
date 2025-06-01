@@ -1,5 +1,5 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImage, ImageBuffer, ImageEncoder, Rgba,
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba
 };
 use tesseract::Tesseract;
 
@@ -44,7 +44,7 @@ impl Agent {
 pub struct PickStage;
 
 impl PickStage {
-    pub fn get_agent_ocr(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String> {
+    pub fn get_agent_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> Vec<String> {
         const H1: u32 = 453;
         const H2: u32 = 900;
 
@@ -70,7 +70,7 @@ impl PickStage {
         let mut buffer = Vec::new();
 
         for (x, y) in char_pos.into_iter() {
-            let agent_image = image.sub_image(x, y, WIDTH, HEIGHT).to_image();
+            let agent_image = image.view(x, y, WIDTH, HEIGHT).to_image();
             // agent_image.save(format!("char-{}.png", x)).unwrap();
 
             let png_encoder = PngEncoder::new(&mut buffer);
