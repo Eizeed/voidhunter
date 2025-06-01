@@ -34,6 +34,7 @@ pub enum Message {
     ScanTick(Instant),
     SetAgents(Option<Vec<Option<Agent>>>),
     SetTimer(Option<Timer>),
+    SetIngameTimer(Option<Timer>),
     ChangeStage(Stage),
 }
 
@@ -48,6 +49,7 @@ pub enum Stage {
 
 pub struct GameMatch {
     timer: Option<Timer>,
+    ingame_timer: Option<Timer>,
     agents: Option<Vec<Option<Agent>>>,
     current_image: Arc<Mutex<Vec<u8>>>,
     window_exists: bool,
@@ -63,6 +65,7 @@ impl GameMatch {
 
         GameMatch {
             timer: None,
+            ingame_timer: None,
             agents: None,
             current_image: buffer,
             window_exists,
@@ -106,7 +109,7 @@ impl GameMatch {
                         };
 
                         if run_timer.is_some() {
-                            return Message::ChangeStage(Stage::Timer);
+                            return Message::ChangeStage(Stage::Run);
                         }
 
                         let agents = spawn_blocking(move || {
@@ -117,6 +120,23 @@ impl GameMatch {
                         .unwrap();
 
                         Message::SetAgents(agents)
+                    })),
+                    Stage::Run => Action::Run(Task::future(async move {
+                        let res_timer = if prepare_next_stage {
+                            let ocr = TimerStage::get_timer_ocr(&mut image);
+                            Timer::from_raw_ocr(ocr.as_str())
+                        } else {
+                            None
+                        };
+
+                        if let Some(timer) = res_timer {
+                            return Message::SetTimer(Some(timer));
+                        }
+
+                        let ocr = RunStage::get_timer_ocr(&mut image);
+                        let timer = Timer::from_raw_ocr(ocr.as_str());
+
+                        Message::SetIngameTimer(timer)
                     })),
                     Stage::Timer => Action::Run(Task::future(async {
                         let timer = spawn_blocking(move || {
@@ -138,6 +158,17 @@ impl GameMatch {
                     self.prepare_next_stage = false;
                     self.agents = agents;
                 }
+
+                Action::None
+            }
+            Message::SetIngameTimer(timer) => {
+                if self.ingame_timer.is_some() && timer.is_none() {
+                    self.prepare_next_stage = true;
+                } else {
+                    self.prepare_next_stage = false;
+                    self.ingame_timer = timer;
+                }
+
                 Action::None
             }
             Message::SetTimer(timer) => {
@@ -231,8 +262,10 @@ impl GameMatch {
                 Column::from_vec(cols).width(Length::Fill).spacing(30)
             }
             _ => {
-                let timer = if let Some(timer) = &self.timer {
-                    text(timer.to_string()).size(20).color(Color::WHITE)
+                let timer = if let Some(timer) = &self.ingame_timer {
+                    text(format!("Ingame timer: {}", timer.to_string()))
+                        .size(20)
+                        .color(Color::WHITE)
                 } else {
                     text("No timer on the screen").size(20).color(Color::WHITE)
                 };

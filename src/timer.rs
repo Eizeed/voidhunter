@@ -74,36 +74,93 @@ impl RunStage {
 
             // Loop digits in section
             for k in 0..2 {
-                let x = start_x + 1 + (inner_gap + WIDTH) * k;
+                let start_x = start_x + (inner_gap + WIDTH) * k;
                 // Loop left part
+                let x = start_x + 1;
                 for num in 0..2 {
-                    let x = x;
                     let y = 6 + num * 9;
 
+                    if let Some(left_x) = x.checked_sub(2) {
+                        if image.get_pixel(left_x, y).0[0] > 0 {
+                            println!(
+                                "Pixel: {}, x: {}, y:{}",
+                                image.get_pixel(left_x, y).0[0],
+                                left_x,
+                                y
+                            );
+                            return String::new();
+                        }
+                    }
+
+                    if image.get_pixel(x + 2, y).0[0] > 0 {
+                        return String::new();
+                    }
+
                     let pixel = image.get_pixel(x, y).0[0];
-                    segments.push(pixel > 128);
+                    segments.push(pixel == 255);
                 }
 
                 // Loop middle part
+                let x = start_x + 7;
                 for num in 0..3 {
-                    let x = x + 7;
-                    let y = 1 + num * 9;
+                    let y: u32 = 1 + num * 9;
+
+                    if let Some(top_y) = y.checked_sub(2) {
+                        if image.get_pixel(x, top_y).0[0] > 0 {
+                            println!(
+                                "Pixel: {}, x: {}, y:{}",
+                                image.get_pixel(x, top_y).0[0],
+                                x,
+                                top_y,
+                            );
+                            return String::new();
+                        }
+                    }
+
+                    if y + 2 <= 20 {
+                        if image.get_pixel(x, y + 2).0[0] > 0 {
+                            println!(
+                                "Pixel: {}, x: {}, y:{}",
+                                image.get_pixel(x, y + 2).0[0],
+                                x,
+                                y + 2
+                            );
+                            return String::new();
+                        }
+                    }
 
                     let pixel = image.get_pixel(x, y).0[0];
-                    segments.push(pixel > 128);
+                    segments.push(pixel == 255);
                 }
 
                 // Loop right part
+                let x = start_x + 13;
                 for num in 0..2 {
-                    let x = x + 13;
                     let y = 6 + num * 9;
 
+                    if x + 2 <= 125 {
+                        if image.get_pixel(x + 2, y).0[0] > 0 {
+                            println!(
+                                "Pixel: {}, x: {}, y:{}",
+                                image.get_pixel(x + 2, y).0[0],
+                                x + 2,
+                                y
+                            );
+                            return String::new();
+                        }
+                    }
+
+                    if image.get_pixel(x - 2, y).0[0] > 0 {
+                        return String::new();
+                    }
+
                     let pixel = image.get_pixel(x, y).0[0];
-                    segments.push(pixel > 128);
+                    segments.push(pixel == 255);
                 }
+
                 let seg_slice: &[bool; 7] = &segments[0..7].try_into().unwrap();
                 let num = parse_segment(seg_slice).map(|n| n.to_string());
-                
+
                 let Some(num) = num else {
                     return String::new();
                 };
@@ -113,7 +170,9 @@ impl RunStage {
                 segments.clear();
             }
 
-            numbers.push(':');
+            if i < 2 {
+                numbers.push(':');
+            }
         }
 
         numbers
