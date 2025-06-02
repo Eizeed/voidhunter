@@ -48,8 +48,9 @@ impl App {
                     match action {
                         home::Action::Run(task) => task.map(Message::Home),
                         home::Action::StartGame => {
-                            self.screen = Screen::GameMatch(GameMatch::new());
-                            Task::none()
+                            let (screen, task) = GameMatch::new();
+                            self.screen = Screen::GameMatch(screen);
+                            task.map(Message::GameMatch)
                         }
                         home::Action::None => Task::none(),
                     }
