@@ -41,7 +41,7 @@ impl FrontierOcr {
         const HEIGHT: u32 = 28;
 
         let frontier_title = image.view(X, Y, WIDTH, HEIGHT).to_image();
-        frontier_title.save("front.png").unwrap();
+        // frontier_title.save("front.png").unwrap();
 
         let mut buffer = vec![];
 

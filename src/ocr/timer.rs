@@ -64,7 +64,7 @@ impl RunStage {
         let timer = &contrast(&grayscale(&timer), 200.0);
         // timer.pixels()
 
-        timer.save("ingame_timer.png").unwrap();
+        // timer.save("ingame_timer.png").unwrap();
 
         Self::parse_7_dig(timer)
     }

@@ -48,11 +48,11 @@ impl PauseOcr {
 
         let restart = image.view(X1, Y, WIDTH, HEIGHT).to_image();
         // let restart = &contrast(&grayscale(&restart), 100.0);
-        restart.save("pause_r.png");
+        // restart.save("pause_r.png");
 
         let pause = image.view(X2, Y, WIDTH, HEIGHT).to_image();
         // let pause = &contrast(&grayscale(&pause), 100.0);
-        pause.save("pause_p.png");
+        // pause.save("pause_p.png");
 
         let mut buffer_restart = vec![];
         let png_encoder = PngEncoder::new(&mut buffer_restart);

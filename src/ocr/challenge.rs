@@ -80,7 +80,7 @@ impl ChallengeOcr {
 
         coords.into_iter().for_each(|(y, w)| {
             let challenge = image.view(X, y, w, HEIGHT).to_image();
-            challenge.save(format!("chall-{}-{}.png", y, w)).unwrap();
+            // challenge.save(format!("chall-{}-{}.png", y, w)).unwrap();
 
             let png_encoder = PngEncoder::new(&mut buffer);
             png_encoder
