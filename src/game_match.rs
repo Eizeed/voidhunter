@@ -6,7 +6,7 @@ use std::{
 
 use iced::{
     alignment::Horizontal,
-    widget::{button, column, text, Column, Row},
+    widget::{button, column, row, text, Column, Row},
     Color, Element, Length, Subscription, Task,
 };
 use image::RgbaImage;
@@ -338,9 +338,13 @@ impl GameMatch {
                 match &self.stage {
                     Stage::Finished => {
                         let result = MatchResult {
-                            agents: self.agents.take().expect("Expect agents is always Some"),
-                            timer: self.timer.take().expect("expect timer to be Some"),
+                            agents: self.agents.take().expect("expect self.agents to be Some"),
+                            timer: self.timer.take().expect("expect self.timer to be Some"),
                             restart_amount: self.restart_amount,
+                            frontier: self
+                                .frontier
+                                .take()
+                                .expect("expect self.frontier to be Some"),
                         };
 
                         self.match_result.push(result);
@@ -390,11 +394,20 @@ impl GameMatch {
 
                 let mut cols = Vec::with_capacity(2);
 
+                let mut total = 0;
+
                 while let Some((idx, match_res)) = iter.next() {
-                    let header = text(format!("Roster {}", idx + 1))
+                    let roster = text(format!("Roster {}", idx + 1))
                         .size(20)
                         .align_x(Horizontal::Center)
-                        .width(Length::Fill);
+                        .width(Length::FillPortion(1));
+
+                    let frontier = text(format!("Frontier: {:?}", match_res.frontier))
+                        .size(20)
+                        .align_x(Horizontal::Center)
+                        .width(Length::FillPortion(1));
+
+                    let header = row![roster, frontier];
 
                     let restarts =
                         text(format!("Restarts used: {}", match_res.restart_amount)).size(20);
@@ -407,12 +420,18 @@ impl GameMatch {
 
                     let agents = Self::agents(match_res.agents.as_slice());
 
+                    total += match_res.timer.as_secs();
+
                     cols.push(
                         column![header, column![restarts, timer, agents]]
                             .spacing(20)
                             .into(),
                     );
                 }
+
+                let total = Timer::from(total);
+                let total_timer = text(format!("Total timer: {}", total.to_string())).into();
+                cols.push(total_timer);
 
                 Column::from_vec(cols).width(Length::Fill).spacing(30)
             }

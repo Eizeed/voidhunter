@@ -35,6 +35,21 @@ impl Timer {
     }
 }
 
+impl From<u16> for Timer {
+    fn from(value: u16) -> Self {
+        let hours = value / 3600;
+        let remaining = value % 3600;
+        let minutes = remaining / 60;
+        let seconds = remaining % 60;
+
+        Timer {
+            hours,
+            minutes,
+            seconds,
+        }
+    }
+}
+
 pub struct RunStage;
 
 impl RunStage {
