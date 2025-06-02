@@ -1,42 +1,38 @@
 use image::{
-    codecs::png::PngEncoder, imageops::{contrast, grayscale}, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba
+    codecs::png::PngEncoder,
+    imageops::{contrast, grayscale},
+    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
 };
 use imageproc::{distance_transform::Norm, morphology::erode};
 use tesseract::Tesseract;
 
 #[derive(Debug, Clone)]
 pub enum ConfirmDialog {
+    Opaque,
     Restart,
     Exit,
 }
 
 impl ConfirmDialog {
     pub fn from_raw_ocr(message: &str) -> Option<Self> {
-        let first_word = message.split_whitespace().next();
-
-        match first_word {
-            Some(word) => {
-                let word = word.to_lowercase();
-                let word = word.trim();
-
-                if word == "leave" {
-                    return Some(ConfirmDialog::Exit);
-                }
-                if word == "restart" {
-                    return Some(ConfirmDialog::Restart);
-                }
-
-                return None;
-            }
-            None => None,
+        if message.contains("Leave") {
+            return Some(ConfirmDialog::Exit);
         }
+        if message.contains("Restart") {
+            return Some(ConfirmDialog::Restart);
+        }
+
+        if message.contains("battle") {
+            return Some(ConfirmDialog::Opaque);
+        }
+
+        return None;
     }
 }
 
 pub struct ConfirmOcr;
 
 impl ConfirmOcr {
-    // TODO: Add ocr for buttons cancel and accept
     pub fn get_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
         const X: u32 = 784;
         const Y: u32 = 510;

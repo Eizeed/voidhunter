@@ -174,6 +174,8 @@ impl GameMatch {
                             .await
                             .unwrap();
 
+                            println!("Confirm type: {:?}", confirm);
+                            
                             Message::SetRestart(pause.is_some(), confirm.is_some())
                         });
 
