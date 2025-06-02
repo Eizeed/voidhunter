@@ -1,12 +1,12 @@
 use std::{
+    ops::Sub,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use iced::{
     alignment::Horizontal,
-    time,
-    widget::{button, column, text, Column, Row},
+    widget::{button, column, row, text, Column, Row},
     Color, Element, Length, Subscription, Task,
 };
 use image::RgbaImage;
@@ -17,6 +17,7 @@ use crate::{
     capture,
     ocr::{
         agents::{Agent, PickStage},
+        challenge::{Challenge, ChallengeOcr},
         confirm::{ConfirmDialog, ConfirmOcr},
         frontier::{Frontier, FrontierOcr},
         pause::{Pause, PauseOcr},
@@ -39,6 +40,7 @@ pub enum Message {
     ScanTick(Instant),
     SetFrontier(Option<Frontier>),
     SetAgents(Option<Vec<Option<Agent>>>),
+    CheckChallenges(Option<Challenge>),
     SetIngameTimer(Option<Timer>),
     SetTimer(Timer),
     ChangeStage(Stage),
@@ -50,7 +52,6 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub enum Stage {
-    FrontierSelection,
     Pick,
     Prepare,
     Run,
@@ -75,31 +76,49 @@ pub struct GameMatch {
 }
 
 impl GameMatch {
-    pub fn new() -> Self {
+    pub fn new() -> (Self, Task<Message>) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let window_exists = capture(buffer.clone()).is_ok();
 
-        GameMatch {
-            frontier: None,
-            timer: None,
-            ingame_timer: None,
-            restart_amount: 0,
-            agents: None,
-            current_image: buffer,
-            window_exists,
-            stage: Stage::FrontierSelection,
-            match_result: Vec::with_capacity(2),
-            prepare_next_stage: false,
-            in_pause: false,
-            count_restart: false,
-            pause_tick_counter: 0,
-        }
+        (
+            GameMatch {
+                frontier: None,
+                timer: None,
+                ingame_timer: None,
+                restart_amount: 0,
+                agents: None,
+                current_image: buffer,
+                window_exists,
+                stage: Stage::Pick,
+                match_result: Vec::with_capacity(2),
+                prepare_next_stage: false,
+                in_pause: false,
+                count_restart: false,
+                pause_tick_counter: 0,
+            },
+            Task::done(Message::ScanTick(Instant::now())),
+        )
     }
 
     pub fn update(&mut self, message: Message) -> Action {
         let task = match message {
             Message::Home => Action::Home,
-            Message::ScanTick(_now) => {
+            Message::ScanTick(now) => {
+                // Ensure runtime process all messages as chain
+                // and preventing consuming too much resources making
+                // at least 333ms delays between messages.
+                // It will guarantee that interval between messages
+                // are Message execution time or 333ms depends what's
+                // faster
+                let elapsed = now.elapsed();
+                if elapsed < Duration::from_millis(333) {
+                    return Action::Run(Task::future(async move {
+                        let diff = Duration::from_millis(333).sub(elapsed);
+                        tokio::time::sleep(diff).await;
+                        Message::ScanTick(now)
+                    }));
+                }
+
                 if !self.window_exists {
                     let res = capture(self.current_image.clone());
                     if res.is_ok() {
@@ -118,23 +137,11 @@ impl GameMatch {
 
                 let prepare_next_stage = self.prepare_next_stage.clone();
                 match self.stage {
-                    Stage::FrontierSelection => {
+                    Stage::Pick => {
+                        let img = shared_img.clone();
                         let frontier_task = Task::future(async move {
-                            let shared_img1 = shared_img.clone();
-                            let agents = spawn_blocking(move || {
-                                let ocr = PickStage::get_agent_ocr(&shared_img1.clone());
-                                Agent::from_raw_ocr(&ocr)
-                            })
-                            .await
-                            .unwrap();
-
-                            if agents.is_some() {
-                                return Message::ChangeStage(Stage::Pick);
-                            }
-
-                            let shared_img2 = shared_img.clone();
                             let frontier = spawn_blocking(move || {
-                                let ocr = FrontierOcr::get_ocr(&shared_img2);
+                                let ocr = FrontierOcr::get_ocr(&img);
                                 Frontier::from_raw_ocr(ocr)
                             })
                             .await
@@ -143,31 +150,62 @@ impl GameMatch {
                             Message::SetFrontier(frontier)
                         });
 
-                        if prepare_next_stage {}
+                        let img = shared_img.clone();
+                        let agent_task = Task::future(async move {
+                            let agents = spawn_blocking(move || {
+                                let ocr = PickStage::get_agent_ocr(&img.clone());
+                                Agent::from_raw_ocr(&ocr)
+                            })
+                            .await
+                            .unwrap();
 
-                        Action::Run(frontier_task)
+                            Message::SetAgents(agents)
+                        });
+
+                        let img = shared_img.clone();
+                        let change_state_task = Task::future(async move {
+                            if !prepare_next_stage {
+                                return Message::None;
+                            }
+
+                            let challenges = spawn_blocking(move || {
+                                let ocr = ChallengeOcr::get_ocr(&img);
+                                Challenge::from_raw_ocr(ocr)
+                            })
+                            .await
+                            .unwrap();
+
+                            if challenges.is_some() {
+                                Message::ChangeStage(Stage::Prepare)
+                            } else {
+                                Message::None
+                            }
+                        });
+
+                        Action::Run(
+                            frontier_task
+                                .chain(agent_task)
+                                .chain(change_state_task)
+                                .chain(Task::done(Message::ScanTick(Instant::now()))),
+                        )
                     }
-                    Stage::Pick => Action::Run(Task::future(async move {
-                        let run_timer = if prepare_next_stage {
-                            let ocr = RunStage::get_timer_ocr(&*shared_img.clone());
-                            Timer::from_raw_ocr(ocr.as_str())
-                        } else {
-                            None
-                        };
+                    Stage::Prepare => {
+                        let task = Task::future(async move {
+                            let ingame_timer = spawn_blocking(move || {
+                                let ocr = RunStage::get_timer_ocr(&shared_img);
+                                Timer::from_raw_ocr(ocr.as_str())
+                            })
+                            .await
+                            .unwrap();
 
-                        if run_timer.is_some() {
-                            return Message::ChangeStage(Stage::Run);
-                        }
-
-                        let agents = spawn_blocking(move || {
-                            let ocr = PickStage::get_agent_ocr(&*shared_img.clone());
-                            Agent::from_raw_ocr(&ocr)
+                            ingame_timer.map(|t| Message::SetIngameTimer(Some(t)))
                         })
-                        .await
-                        .unwrap();
+                        .and_then(|_| Task::done(Message::ChangeStage(Stage::Run)));
 
-                        Message::SetAgents(agents)
-                    })),
+                        let now = Instant::now();
+
+                        Action::Run(task.chain(Task::done(Message::ScanTick(now))))
+                    }
                     Stage::Run => {
                         let img = shared_img.clone();
                         let ingame_timer_task = Task::future(async move {
@@ -209,16 +247,17 @@ impl GameMatch {
                             .await
                             .unwrap();
 
-                            println!("Confirm type: {:?}", confirm);
+                            // println!("Confirm type: {:?}", confirm);
 
                             Message::SetRestart(pause.is_some(), confirm.is_some())
                         });
 
-                        Action::Run(Task::batch(vec![
-                            ingame_timer_task,
-                            res_timer_task,
-                            restart_task,
-                        ]))
+                        let now = Instant::now();
+
+                        Action::Run(
+                            Task::batch(vec![ingame_timer_task, res_timer_task, restart_task])
+                                .chain(Task::done(Message::ScanTick(now))),
+                        )
                     }
                     _ => Action::None,
                 }
@@ -249,17 +288,18 @@ impl GameMatch {
                     self.pause_tick_counter = 0;
                     self.in_pause = false;
                     self.count_restart = false;
+                    self.ingame_timer = None;
+                    self.stage = Stage::Prepare;
                 }
 
                 Action::None
             }
 
             Message::SetFrontier(frontier) => {
-                if self.frontier.is_some() && frontier.is_none() {
-                    self.prepare_next_stage = true;
-                } else {
+                if let Some(frontier) = frontier {
                     self.prepare_next_stage = false;
-                    self.frontier = frontier;
+                    self.frontier = Some(frontier);
+                    self.agents = None;
                 }
 
                 Action::None
@@ -268,8 +308,10 @@ impl GameMatch {
                 if self.agents.is_some() && agents.is_none() {
                     self.prepare_next_stage = true;
                 } else {
-                    self.prepare_next_stage = false;
-                    self.agents = agents;
+                    if self.frontier.is_some() {
+                        self.prepare_next_stage = false;
+                        self.agents = agents;
+                    }
                 }
 
                 Action::None
@@ -288,6 +330,7 @@ impl GameMatch {
                 self.timer = Some(timer);
                 Action::Run(Task::done(Message::ChangeStage(Stage::Finished)))
             }
+
             Message::ChangeStage(stage) => {
                 self.prepare_next_stage = false;
                 self.stage = stage;
@@ -295,9 +338,13 @@ impl GameMatch {
                 match &self.stage {
                     Stage::Finished => {
                         let result = MatchResult {
-                            agents: self.agents.take().expect("Expect agents is always Some"),
-                            timer: self.timer.take().expect("expect timer to be Some"),
+                            agents: self.agents.take().expect("expect self.agents to be Some"),
+                            timer: self.timer.take().expect("expect self.timer to be Some"),
                             restart_amount: self.restart_amount,
+                            frontier: self
+                                .frontier
+                                .take()
+                                .expect("expect self.frontier to be Some"),
                         };
 
                         self.match_result.push(result);
@@ -346,12 +393,21 @@ impl GameMatch {
                 let mut iter = self.match_result.iter().enumerate();
 
                 let mut cols = Vec::with_capacity(2);
-                
+
+                let mut total = 0;
+
                 while let Some((idx, match_res)) = iter.next() {
-                    let header = text(format!("Roster {}", idx + 1))
+                    let roster = text(format!("Roster {}", idx + 1))
                         .size(20)
                         .align_x(Horizontal::Center)
-                        .width(Length::Fill);
+                        .width(Length::FillPortion(1));
+
+                    let frontier = text(format!("Frontier: {:?}", match_res.frontier))
+                        .size(20)
+                        .align_x(Horizontal::Center)
+                        .width(Length::FillPortion(1));
+
+                    let header = row![roster, frontier];
 
                     let restarts =
                         text(format!("Restarts used: {}", match_res.restart_amount)).size(20);
@@ -364,12 +420,18 @@ impl GameMatch {
 
                     let agents = Self::agents(match_res.agents.as_slice());
 
+                    total += match_res.timer.as_secs();
+
                     cols.push(
                         column![header, column![restarts, timer, agents]]
                             .spacing(20)
                             .into(),
                     );
                 }
+
+                let total = Timer::from(total);
+                let total_timer = text(format!("Total timer: {}", total.to_string())).into();
+                cols.push(total_timer);
 
                 Column::from_vec(cols).width(Length::Fill).spacing(30)
             }
@@ -400,7 +462,8 @@ impl GameMatch {
                     None => text("Not in Pick Stage").into(),
                 };
 
-                column![frontier, paused, confirm, round, restarts, timer, agents].width(Length::Fill)
+                column![frontier, paused, confirm, round, restarts, timer, agents]
+                    .width(Length::Fill)
             }
         });
 
@@ -410,7 +473,8 @@ impl GameMatch {
     }
 
     pub fn subscribtion(&self) -> Subscription<Message> {
-        time::every(Duration::from_millis(333)).map(Message::ScanTick)
+        // time::every(Duration::from_millis(400)).map(Message::ScanTick)
+        Subscription::none()
     }
 
     fn agents(agents: &[Option<Agent>]) -> Element<Message> {
