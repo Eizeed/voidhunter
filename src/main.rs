@@ -4,10 +4,9 @@ use iced::{Element, Subscription, Task};
 mod capture;
 use capture::capture;
 
-mod agents;
 mod game_match;
 mod home;
-mod timer;
+mod ocr;
 
 fn main() {
     let init = || {
