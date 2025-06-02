@@ -18,6 +18,7 @@ use crate::{
     ocr::{
         agents::{Agent, PickStage},
         confirm::{ConfirmDialog, ConfirmOcr},
+        frontier::{Frontier, FrontierOcr},
         pause::{Pause, PauseOcr},
         timer::{RunStage, Timer, TimerStage},
     },
@@ -36,6 +37,7 @@ pub enum Message {
     Home,
 
     ScanTick(Instant),
+    SetFrontier(Option<Frontier>),
     SetAgents(Option<Vec<Option<Agent>>>),
     SetIngameTimer(Option<Timer>),
     SetTimer(Timer),
@@ -48,13 +50,16 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub enum Stage {
+    FrontierSelection,
     Pick,
+    Prepare,
     Run,
     Finished,
     GameOver,
 }
 
 pub struct GameMatch {
+    frontier: Option<Frontier>,
     timer: Option<Timer>,
     ingame_timer: Option<Timer>,
     restart_amount: u8,
@@ -75,13 +80,14 @@ impl GameMatch {
         let window_exists = capture(buffer.clone()).is_ok();
 
         GameMatch {
+            frontier: None,
             timer: None,
             ingame_timer: None,
             restart_amount: 0,
             agents: None,
             current_image: buffer,
             window_exists,
-            stage: Stage::Pick,
+            stage: Stage::FrontierSelection,
             match_result: Vec::with_capacity(2),
             prepare_next_stage: false,
             in_pause: false,
@@ -112,6 +118,35 @@ impl GameMatch {
 
                 let prepare_next_stage = self.prepare_next_stage.clone();
                 match self.stage {
+                    Stage::FrontierSelection => {
+                        let frontier_task = Task::future(async move {
+                            let shared_img1 = shared_img.clone();
+                            let agents = spawn_blocking(move || {
+                                let ocr = PickStage::get_agent_ocr(&shared_img1.clone());
+                                Agent::from_raw_ocr(&ocr)
+                            })
+                            .await
+                            .unwrap();
+
+                            if agents.is_some() {
+                                return Message::ChangeStage(Stage::Pick);
+                            }
+
+                            let shared_img2 = shared_img.clone();
+                            let frontier = spawn_blocking(move || {
+                                let ocr = FrontierOcr::get_ocr(&shared_img2);
+                                Frontier::from_raw_ocr(ocr)
+                            })
+                            .await
+                            .unwrap();
+
+                            Message::SetFrontier(frontier)
+                        });
+
+                        if prepare_next_stage {}
+
+                        Action::Run(frontier_task)
+                    }
                     Stage::Pick => Action::Run(Task::future(async move {
                         let run_timer = if prepare_next_stage {
                             let ocr = RunStage::get_timer_ocr(&*shared_img.clone());
@@ -175,7 +210,7 @@ impl GameMatch {
                             .unwrap();
 
                             println!("Confirm type: {:?}", confirm);
-                            
+
                             Message::SetRestart(pause.is_some(), confirm.is_some())
                         });
 
@@ -219,6 +254,16 @@ impl GameMatch {
                 Action::None
             }
 
+            Message::SetFrontier(frontier) => {
+                if self.frontier.is_some() && frontier.is_none() {
+                    self.prepare_next_stage = true;
+                } else {
+                    self.prepare_next_stage = false;
+                    self.frontier = frontier;
+                }
+
+                Action::None
+            }
             Message::SetAgents(agents) => {
                 if self.agents.is_some() && agents.is_none() {
                     self.prepare_next_stage = true;
@@ -301,7 +346,7 @@ impl GameMatch {
                 let mut iter = self.match_result.iter().enumerate();
 
                 let mut cols = Vec::with_capacity(2);
-
+                
                 while let Some((idx, match_res)) = iter.next() {
                     let header = text(format!("Roster {}", idx + 1))
                         .size(20)
@@ -329,6 +374,11 @@ impl GameMatch {
                 Column::from_vec(cols).width(Length::Fill).spacing(30)
             }
             _ => {
+                let frontier_text = match &self.frontier {
+                    Some(f) => format!("Selected frontier: {:?}", f),
+                    None => format!("Frontier is not selected"),
+                };
+                let frontier = text(frontier_text);
                 let paused = text(format!("Paused: {}", &self.in_pause));
                 let confirm = text(format!("Confirm opened: {}", &self.count_restart));
                 let round = text(format!("Game {}", self.match_result.len() + 1));
@@ -350,7 +400,7 @@ impl GameMatch {
                     None => text("Not in Pick Stage").into(),
                 };
 
-                column![paused, confirm, round, restarts, timer, agents].width(Length::Fill)
+                column![frontier, paused, confirm, round, restarts, timer, agents].width(Length::Fill)
             }
         });
 
