@@ -1,7 +1,7 @@
 use image::{
     codecs::png::PngEncoder,
     imageops::{contrast, grayscale},
-    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
 };
 use imageproc::{distance_transform::Norm, morphology::erode};
 use tesseract::Tesseract;
@@ -14,6 +14,11 @@ pub enum ConfirmDialog {
 }
 
 impl ConfirmDialog {
+    pub fn from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = ConfirmOcr::get_ocr(image);
+        ConfirmDialog::from_raw_ocr(&ocr)
+    }
+    
     pub fn from_raw_ocr(message: &str) -> Option<Self> {
         if message.contains("Leave") {
             return Some(ConfirmDialog::Exit);

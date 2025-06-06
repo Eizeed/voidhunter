@@ -1,5 +1,6 @@
 use crate::ocr::{agents::Agent, frontier::Frontier, timer::Timer};
 
+#[derive(Debug, Clone)]
 pub struct MatchResult {
     pub agents: Vec<Option<Agent>>,
     pub timer: Timer,

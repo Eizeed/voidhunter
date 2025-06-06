@@ -1,5 +1,5 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -7,6 +7,11 @@ use tesseract::Tesseract;
 pub struct Challenge;
 
 impl Challenge {
+    pub fn from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = ChallengeOcr::get_ocr(image);
+        Self::from_raw_ocr(ocr)
+    }
+    
     pub fn from_raw_ocr(values: Vec<String>) -> Option<Challenge> {
         let ch_time_1 = values.get(0)?;
         let ch_time_2 = values.get(1)?;
@@ -114,12 +119,6 @@ impl ChallengeOcr {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use image::RgbaImage;
-
-    use crate::capture::capture_once;
-
     use super::*;
 
     #[test]

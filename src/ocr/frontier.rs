@@ -1,5 +1,5 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -12,6 +12,11 @@ pub enum Frontier {
 }
 
 impl Frontier {
+    pub fn from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = FrontierOcr::get_ocr(image);
+        Frontier::from_raw_ocr(ocr)
+    }
+    
     pub fn from_raw_ocr(frontier: String) -> Option<Self> {
         let mut iter = frontier.split_whitespace();
         let num = iter.next()?;

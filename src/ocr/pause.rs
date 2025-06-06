@@ -1,5 +1,5 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -7,6 +7,11 @@ use tesseract::Tesseract;
 pub struct Pause;
 
 impl Pause {
+    pub fn from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = PauseOcr::get_ocr(image);
+        Pause::from_raw_ocr(ocr)
+    }
+    
     pub fn from_raw_ocr((restart, exit): (String, String)) -> Option<Self> {
         let mut iter = restart.split_whitespace();
         let restart_res;

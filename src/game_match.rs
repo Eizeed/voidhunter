@@ -11,27 +11,25 @@ use iced::{
 };
 use image::RgbaImage;
 use match_result::MatchResult;
-use tokio::task::spawn_blocking;
 
 use crate::{
+    bitmap::BitmapU16,
     capture,
     ocr::{
-        agents::{Agent, PickStage},
-        challenge::{Challenge, ChallengeOcr},
-        confirm::{ConfirmDialog, ConfirmOcr},
-        frontier::{Frontier, FrontierOcr},
-        pause::{Pause, PauseOcr},
-        timer::{RunStage, Timer, TimerStage},
+        agents::Agent, challenge::Challenge, confirm::ConfirmDialog, frontier::Frontier, hp::Hp,
+        loading::Loading, pause::Pause, timer::Timer,
     },
+    spawn_blocking,
 };
+
+mod match_result;
+mod transition;
 
 pub enum Action {
     Run(Task<Message>),
     Home,
     None,
 }
-
-mod match_result;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -40,61 +38,106 @@ pub enum Message {
     ScanTick(Instant),
     SetFrontier(Option<Frontier>),
     SetAgents(Option<Vec<Option<Agent>>>),
-    CheckChallenges(Option<Challenge>),
+    SetChallenges(Option<Challenge>),
+    SetHp(Option<Hp>),
     SetIngameTimer(Option<Timer>),
-    SetTimer(Timer),
+    SetTimer(Option<Timer>),
+    SetLoading(Option<Loading>),
+    SetPause(Option<Pause>),
+    SetConfirmDialog(Option<ConfirmDialog>),
+
+    CheckState,
+
     ChangeStage(Stage),
     SetRestart(bool, bool),
+    SetVisibleHp(bool),
     // SetPause(bool),
     // SetConfirm(bool),
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stage {
     Pick,
-    Prepare,
-    Run,
+    FirstHalf(HalfStage),
+    SecondHalf(HalfStage),
     Finished,
     GameOver,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HalfStage {
+    Prepare,
+    Run,
+    Cleared,
+}
+
+#[derive(Debug, Clone)]
 pub struct GameMatch {
-    frontier: Option<Frontier>,
-    timer: Option<Timer>,
-    ingame_timer: Option<Timer>,
-    restart_amount: u8,
-    agents: Option<Vec<Option<Agent>>>,
-    current_image: Arc<Mutex<Vec<u8>>>,
     window_exists: bool,
+    current_image: Arc<Mutex<Vec<u8>>>,
+    match_results: Vec<MatchResult>,
+
+    game: GameState,
+
+    player_state: PlayerAction,
+    prev_state: PlayerAction,
+}
+
+#[derive(Debug, Clone)]
+pub struct GameState {
+    frontier: Option<Frontier>,
+    agents: Option<Vec<Option<Agent>>>,
+    ingame_timer: Option<Timer>,
+    res_timer: Option<Timer>,
+    restart_amount: u8,
+    is_dirty: bool,
     stage: Stage,
-    match_result: Vec<MatchResult>,
-    prepare_next_stage: bool,
-    in_pause: bool,
-    count_restart: bool,
-    pause_tick_counter: u32,
+    next_stage: bool,
+    visibility_flags: BitmapU16,
+    tick: u32,
+}
+
+impl GameState {
+    pub fn new() -> Self {
+        GameState {
+            frontier: None,
+            agents: None,
+            ingame_timer: None,
+            res_timer: None,
+            restart_amount: 0,
+            is_dirty: false,
+            stage: Stage::Pick,
+            next_stage: false,
+            visibility_flags: 0.into(),
+            tick: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerAction {
+    None,
+    Pause,
+    RestartDialog,
+    ExitDialog,
 }
 
 impl GameMatch {
     pub fn new() -> (Self, Task<Message>) {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        // 3 MB dedicated for image capturing to avoid additional allocations
+        // NOTE: the biggest image i've seen is 2297 KB.
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(1024 * 1024 * 3)));
         let window_exists = capture(buffer.clone()).is_ok();
 
         (
             GameMatch {
-                frontier: None,
-                timer: None,
-                ingame_timer: None,
-                restart_amount: 0,
-                agents: None,
-                current_image: buffer,
                 window_exists,
-                stage: Stage::Pick,
-                match_result: Vec::with_capacity(2),
-                prepare_next_stage: false,
-                in_pause: false,
-                count_restart: false,
-                pause_tick_counter: 0,
+                current_image: buffer,
+                match_results: Vec::with_capacity(2),
+                game: GameState::new(),
+                player_state: PlayerAction::None,
+                prev_state: PlayerAction::None,
             },
             Task::done(Message::ScanTick(Instant::now())),
         )
@@ -103,17 +146,20 @@ impl GameMatch {
     pub fn update(&mut self, message: Message) -> Action {
         let task = match message {
             Message::Home => Action::Home,
+
             Message::ScanTick(now) => {
-                // Ensure runtime process all messages as chain
-                // and preventing consuming too much resources making
-                // at least 333ms delays between messages.
-                // It will guarantee that interval between messages
-                // are Message execution time or 333ms depends what's
-                // faster
+                const DIFF: u64 = 250;
+                // Need to make at least delay.
+                // We have to chain tasks recursivly because
+                // update function doesn't wait for the prev task
+                // to be completed unless chained.
+                // It means that Message::ScanTick will trigget
+                // every time and it doesn't guarantee that prev
+                // ScanTick was completed. It can lead to data races.
                 let elapsed = now.elapsed();
-                if elapsed < Duration::from_millis(333) {
+                if elapsed < Duration::from_millis(DIFF) {
                     return Action::Run(Task::future(async move {
-                        let diff = Duration::from_millis(333).sub(elapsed);
+                        let diff = Duration::from_millis(DIFF).sub(elapsed);
                         tokio::time::sleep(diff).await;
                         Message::ScanTick(now)
                     }));
@@ -125,241 +171,274 @@ impl GameMatch {
                         self.window_exists = true;
                     }
 
-                    return Action::None;
+                    return Action::Run(Task::done(Message::ScanTick(Instant::now())));
                 }
 
                 let image_buf = self.current_image.lock().unwrap().clone();
                 if image_buf.is_empty() {
-                    return Action::None;
+                    return Action::Run(Task::done(Message::ScanTick(Instant::now())));
                 }
                 let image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
                 let shared_img = Arc::new(image);
 
-                let prepare_next_stage = self.prepare_next_stage.clone();
-                match self.stage {
-                    Stage::Pick => {
-                        let img = shared_img.clone();
-                        let frontier_task = Task::future(async move {
-                            let frontier = spawn_blocking(move || {
-                                let ocr = FrontierOcr::get_ocr(&img);
-                                Frontier::from_raw_ocr(ocr)
-                            })
-                            .await
-                            .unwrap();
+                let next_stage = self.game.next_stage.clone();
 
+                let task = match self.game.stage {
+                    Stage::Pick => {
+                        let img = Arc::clone(&shared_img);
+                        let frontier_task = Task::future(async move {
+                            let frontier = spawn_blocking!(Frontier::from_image(&img));
                             Message::SetFrontier(frontier)
                         });
 
-                        let img = shared_img.clone();
-                        let agent_task = Task::future(async move {
-                            let agents = spawn_blocking(move || {
-                                let ocr = PickStage::get_agent_ocr(&img.clone());
-                                Agent::from_raw_ocr(&ocr)
-                            })
-                            .await
-                            .unwrap();
-
+                        let img = Arc::clone(&shared_img);
+                        let agents_task = Task::future(async move {
+                            let agents = spawn_blocking!(Agent::from_image(&img));
                             Message::SetAgents(agents)
                         });
 
-                        let img = shared_img.clone();
-                        let change_state_task = Task::future(async move {
-                            if !prepare_next_stage {
-                                return Message::None;
-                            }
-
-                            let challenges = spawn_blocking(move || {
-                                let ocr = ChallengeOcr::get_ocr(&img);
-                                Challenge::from_raw_ocr(ocr)
+                        let img = Arc::clone(&shared_img);
+                        let challenges_task = if next_stage {
+                            Task::future(async move {
+                                let challenges = spawn_blocking!(Challenge::from_image(&img));
+                                Message::SetChallenges(challenges)
                             })
-                            .await
-                            .unwrap();
+                        } else {
+                            Task::none()
+                        };
 
-                            if challenges.is_some() {
-                                Message::ChangeStage(Stage::Prepare)
-                            } else {
-                                Message::None
-                            }
-                        });
-
-                        Action::Run(
-                            frontier_task
-                                .chain(agent_task)
-                                .chain(change_state_task)
-                                .chain(Task::done(Message::ScanTick(Instant::now()))),
-                        )
-                    }
-                    Stage::Prepare => {
-                        let task = Task::future(async move {
-                            let ingame_timer = spawn_blocking(move || {
-                                let ocr = RunStage::get_timer_ocr(&shared_img);
-                                Timer::from_raw_ocr(ocr.as_str())
+                        let img = Arc::clone(&shared_img);
+                        let hp_task = if next_stage {
+                            Task::future(async move {
+                                let challenges = spawn_blocking!(Hp::from_image(&img));
+                                Message::SetHp(challenges)
                             })
-                            .await
-                            .unwrap();
+                        } else {
+                            Task::none()
+                        };
 
-                            ingame_timer.map(|t| Message::SetIngameTimer(Some(t)))
-                        })
-                        .and_then(|_| Task::done(Message::ChangeStage(Stage::Run)));
-
-                        let now = Instant::now();
-
-                        Action::Run(task.chain(Task::done(Message::ScanTick(now))))
+                        frontier_task
+                            .chain(agents_task)
+                            .chain(challenges_task)
+                            .chain(hp_task)
                     }
-                    Stage::Run => {
-                        let img = shared_img.clone();
+                    Stage::FirstHalf(ref half_stage) => {
+                        let img = Arc::clone(&shared_img);
                         let ingame_timer_task = Task::future(async move {
-                            let ingame_timer = spawn_blocking(move || {
-                                let ocr = RunStage::get_timer_ocr(&img);
-                                Timer::from_raw_ocr(ocr.as_str())
-                            })
-                            .await
-                            .unwrap();
-
+                            let ingame_timer = Timer::ingame_from_image(&img);
                             Message::SetIngameTimer(ingame_timer)
                         });
 
-                        let img = shared_img.clone();
-                        let res_timer_task = Task::future(async move {
-                            let res_timer = spawn_blocking(move || {
-                                let ocr = TimerStage::get_timer_ocr(&img);
-                                Timer::from_raw_ocr(ocr.as_str())
-                            })
-                            .await
-                            .unwrap();
+                        let img = Arc::clone(&shared_img);
+                        let hp_task = Task::future(async move {
+                            let challenges = spawn_blocking!(Hp::from_image(&img));
+                            Message::SetHp(challenges)
+                        });
 
-                            match res_timer {
-                                Some(t) => Message::SetTimer(t),
-                                None => Message::None,
+                        let img = Arc::clone(&shared_img);
+                        let loading_task = Task::future(async move {
+                            let loading = spawn_blocking!(Loading::from_image(&img));
+                            Message::SetLoading(loading)
+                        });
+
+                        let pause_task = match half_stage {
+                            HalfStage::Run | HalfStage::Cleared => {
+                                let img = Arc::clone(&shared_img);
+                                Task::future(async move {
+                                    let pause = spawn_blocking!(Pause::from_image(&img));
+                                    Message::SetPause(pause)
+                                })
                             }
+                            _ => Task::none(),
+                        };
+
+                        let confirm_task = match half_stage {
+                            HalfStage::Run | HalfStage::Cleared => {
+                                let img = Arc::clone(&shared_img);
+                                Task::future(async move {
+                                    let confirm_dialog =
+                                        spawn_blocking!(ConfirmDialog::from_image(&img));
+                                    Message::SetConfirmDialog(confirm_dialog)
+                                })
+                            }
+                            _ => Task::none(),
+                        };
+
+                        Task::batch(vec![
+                            ingame_timer_task,
+                            hp_task,
+                            pause_task,
+                            confirm_task,
+                            loading_task,
+                        ])
+                    }
+                    Stage::SecondHalf(ref half_stage) => {
+                        let img = Arc::clone(&shared_img);
+                        let ingame_timer_task = Task::future(async move {
+                            let ingame_timer = Timer::ingame_from_image(&img);
+                            Message::SetIngameTimer(ingame_timer)
                         });
 
-                        let img1 = shared_img.clone();
-                        // let img2 = shared_img.clone();
-                        let restart_task = Task::future(async move {
-                            let (confirm, pause) = spawn_blocking(move || {
-                                let ocr = PauseOcr::get_ocr(&img1);
-                                let pause = Pause::from_raw_ocr(ocr);
-                                let ocr = ConfirmOcr::get_ocr(&img1);
-                                let confirm = ConfirmDialog::from_raw_ocr(&ocr);
-                                (confirm, pause)
-                            })
-                            .await
-                            .unwrap();
-
-                            // println!("Confirm type: {:?}", confirm);
-
-                            Message::SetRestart(pause.is_some(), confirm.is_some())
+                        let img = Arc::clone(&shared_img);
+                        let hp_task = Task::future(async move {
+                            let challenges = spawn_blocking!(Hp::from_image(&img));
+                            Message::SetHp(challenges)
                         });
 
-                        let now = Instant::now();
+                        let img = Arc::clone(&shared_img);
+                        let loading_task = Task::future(async move {
+                            let loading = spawn_blocking!(Loading::from_image(&img));
+                            Message::SetLoading(loading)
+                        });
 
-                        Action::Run(
-                            Task::batch(vec![ingame_timer_task, res_timer_task, restart_task])
-                                .chain(Task::done(Message::ScanTick(now))),
-                        )
+                        let pause_task = match half_stage {
+                            HalfStage::Run | HalfStage::Cleared => {
+                                let img = Arc::clone(&shared_img);
+                                Task::future(async move {
+                                    let pause = spawn_blocking!(Pause::from_image(&img));
+                                    Message::SetPause(pause)
+                                })
+                            }
+                            _ => Task::none(),
+                        };
+
+                        let confirm_task = match half_stage {
+                            HalfStage::Run | HalfStage::Cleared => {
+                                let img = Arc::clone(&shared_img);
+                                Task::future(async move {
+                                    let confirm_dialog =
+                                        spawn_blocking!(ConfirmDialog::from_image(&img));
+                                    Message::SetConfirmDialog(confirm_dialog)
+                                })
+                            }
+                            _ => Task::none(),
+                        };
+
+                        let res_timer_task =
+                            if let Stage::SecondHalf(HalfStage::Cleared) = self.game.stage {
+                                let img = Arc::clone(&shared_img);
+                                Task::future(async move {
+                                    let challenges = spawn_blocking!(Timer::res_from_image(&img));
+                                    Message::SetTimer(challenges)
+                                })
+                            } else {
+                                Task::none()
+                            };
+
+                        Task::batch(vec![
+                            ingame_timer_task,
+                            hp_task,
+                            res_timer_task,
+                            pause_task,
+                            confirm_task,
+                            loading_task,
+                        ])
                     }
-                    _ => Action::None,
-                }
-            }
+                    Stage::Finished => Task::done(Message::CheckState)
+                        .chain(Task::done(Message::ScanTick(Instant::now()))),
+                    _ => Task::none(),
+                };
 
-            Message::SetRestart(is_paused, is_confirm) => {
-                // println!(
-                //     "SetRestart: is_paused: {}, is_confirm: {}",
-                //     is_paused, is_confirm
-                // );
-                if !is_paused && !is_confirm && self.count_restart && !self.in_pause {
-                    self.pause_tick_counter += 1;
-                } else {
-                    self.in_pause = is_paused;
+                let now = Instant::now();
 
-                    if self.in_pause {
-                        self.count_restart = false;
-                    } else {
-                        self.count_restart = is_confirm;
-                    }
-
-                    self.pause_tick_counter = 0;
-                }
-
-                // 3 seconds
-                if self.pause_tick_counter >= 6 {
-                    self.restart_amount += 1;
-                    self.pause_tick_counter = 0;
-                    self.in_pause = false;
-                    self.count_restart = false;
-                    self.ingame_timer = None;
-                    self.stage = Stage::Prepare;
-                }
-
-                Action::None
+                Action::Run(
+                    task.chain(Task::done(Message::CheckState))
+                        .chain(Task::done(Message::ScanTick(now))),
+                )
             }
 
             Message::SetFrontier(frontier) => {
-                if let Some(frontier) = frontier {
-                    self.prepare_next_stage = false;
-                    self.frontier = Some(frontier);
-                    self.agents = None;
-                }
+                self.game.visibility_flags.set_frontier(frontier.is_some());
+                frontier.map(|f| self.game.frontier = Some(f));
 
                 Action::None
             }
             Message::SetAgents(agents) => {
-                if self.agents.is_some() && agents.is_none() {
-                    self.prepare_next_stage = true;
+                self.game.visibility_flags.set_agents(agents.is_some());
+                agents.map(|a| self.game.agents = Some(a));
+
+                Action::None
+            }
+            Message::SetChallenges(challenges) => {
+                self.game
+                    .visibility_flags
+                    .set_challenges(challenges.is_some());
+
+                Action::None
+            }
+            Message::SetHp(hp) => {
+                self.game.visibility_flags.set_hp(hp.is_some());
+
+                Action::None
+            }
+            Message::SetIngameTimer(ingame_timer) => {
+                self.game
+                    .visibility_flags
+                    .set_ingame_timer(ingame_timer.is_some());
+                ingame_timer.map(|t| self.game.ingame_timer = Some(t));
+
+                Action::None
+            }
+            Message::SetTimer(res_timer) => {
+                self.game
+                    .visibility_flags
+                    .set_res_timer(res_timer.is_some());
+                res_timer.map(|t| self.game.res_timer = Some(t));
+
+                Action::None
+            }
+            Message::SetLoading(loading) => {
+                self.game.visibility_flags.set_loading(loading.is_some());
+                Action::None
+            }
+            Message::SetPause(pause) => {
+                self.game.visibility_flags.set_pause(pause.is_some());
+
+                Action::None
+            }
+            Message::SetConfirmDialog(confirm) => {
+                // TODO: Make separate flags for exit and restart
+                self.game
+                    .visibility_flags
+                    .set_confirm_dialog(confirm.is_some());
+
+                Action::None
+            }
+
+            Message::CheckState => {
+                if self.game.visibility_flags.confirm_dialog() {
+                    self.player_state = PlayerAction::RestartDialog;
+                } else if self.game.visibility_flags.pause() {
+                    self.player_state = PlayerAction::Pause;
                 } else {
-                    if self.frontier.is_some() {
-                        self.prepare_next_stage = false;
-                        self.agents = agents;
+                    if self.game.visibility_flags.hp()
+                        || self.game.visibility_flags.ingame_timer()
+                        || self.game.visibility_flags.res_timer()
+                    {
+                        self.player_state = PlayerAction::None;
+
+                        // Edgecase where player paused just before he cleared the room
+                        // in the second half, so ocr won't be able to capture hp nor timer
+                        if self.game.visibility_flags.res_timer() {
+                            self.game.tick = 18;
+                        }
                     }
                 }
 
-                Action::None
-            }
-            Message::SetIngameTimer(timer) => {
-                if self.ingame_timer.is_some() && timer.is_none() {
-                    self.prepare_next_stage = true;
-                } else {
-                    self.prepare_next_stage = false;
-                    self.ingame_timer = timer;
-                }
+                let transition = self
+                    .transition()
+                    .map(|s| Message::ChangeStage(s))
+                    .unwrap_or(Message::None);
 
-                Action::None
-            }
-            Message::SetTimer(timer) => {
-                self.timer = Some(timer);
-                Action::Run(Task::done(Message::ChangeStage(Stage::Finished)))
+                Action::Run(Task::done(transition))
             }
 
             Message::ChangeStage(stage) => {
-                self.prepare_next_stage = false;
-                self.stage = stage;
+                self.game.next_stage = false;
+                self.game.stage = stage;
+                self.player_state = PlayerAction::None;
 
-                match &self.stage {
-                    Stage::Finished => {
-                        let result = MatchResult {
-                            agents: self.agents.take().expect("expect self.agents to be Some"),
-                            timer: self.timer.take().expect("expect self.timer to be Some"),
-                            restart_amount: self.restart_amount,
-                            frontier: self
-                                .frontier
-                                .take()
-                                .expect("expect self.frontier to be Some"),
-                        };
-
-                        self.match_result.push(result);
-
-                        self.restart_amount = 0;
-                        self.ingame_timer = None;
-
-                        if self.match_result.len() == 2 {
-                            self.stage = Stage::GameOver;
-                        } else {
-                            self.stage = Stage::Pick;
-                        }
-                    }
-                    _ => {}
-                }
+                println!("Setting stage. Current stage: {:#?}", self.game.stage);
                 Action::None
             }
             _ => Action::None,
@@ -376,21 +455,21 @@ impl GameMatch {
         }
 
         let col_content = Column::new();
-        let current_stage = text(format!("{:?}", self.stage))
+        let current_stage = text(format!("{:?}", self.game.stage))
             .size(25)
             .color(Color::WHITE);
 
         let col_content = col_content.push(current_stage);
 
-        let change_stage = text(format!("Change state: {:?}", self.prepare_next_stage))
+        let change_stage = text(format!("Change state: {:?}", self.game.next_stage))
             .size(20)
             .color(Color::WHITE);
 
         let col_content = col_content.push(change_stage);
 
-        let col_content = col_content.push(match self.stage {
+        let col_content = col_content.push(match self.game.stage {
             Stage::GameOver => {
-                let mut iter = self.match_result.iter().enumerate();
+                let mut iter = self.match_results.iter().enumerate();
 
                 let mut cols = Vec::with_capacity(2);
 
@@ -436,16 +515,24 @@ impl GameMatch {
                 Column::from_vec(cols).width(Length::Fill).spacing(30)
             }
             _ => {
-                let frontier_text = match &self.frontier {
+                let frontier_text = match &self.game.frontier {
                     Some(f) => format!("Selected frontier: {:?}", f),
                     None => format!("Frontier is not selected"),
                 };
                 let frontier = text(frontier_text);
-                let paused = text(format!("Paused: {}", &self.in_pause));
-                let confirm = text(format!("Confirm opened: {}", &self.count_restart));
-                let round = text(format!("Game {}", self.match_result.len() + 1));
-                let restarts = text(format!("Restarts used: {}", self.restart_amount));
-                let timer = if let Some(timer) = &self.ingame_timer {
+                let paused = text(format!(
+                    "Paused: {}",
+                    matches!(&self.player_state, PlayerAction::Pause)
+                ));
+                let confirm = text(format!(
+                    "Confirm opened: {}",
+                    matches!(&self.player_state, PlayerAction::RestartDialog)
+                ));
+                let round = text(format!("Game {}", self.match_results.len() + 1));
+                let ticks = text(format!("TIcks {}", self.game.tick));
+                let restarts = text(format!("Restarts used: {}", self.game.restart_amount));
+                let player_action = text(format!("Player Action: {:?}", self.player_state));
+                let timer = if let Some(timer) = &self.game.ingame_timer {
                     text(format!("Ingame timer: {}", timer.to_string()))
                         .size(20)
                         .color(Color::WHITE)
@@ -453,7 +540,7 @@ impl GameMatch {
                     text("No timer on the screen").size(20).color(Color::WHITE)
                 };
 
-                let agents: Element<_, _, _> = match self.agents.as_ref() {
+                let agents: Element<_, _, _> = match self.game.agents.as_ref() {
                     Some(agents) => {
                         let header = text("Chosen agents:").size(20).color(Color::WHITE);
                         let agents = Self::agents(agents.as_slice());
@@ -462,8 +549,18 @@ impl GameMatch {
                     None => text("Not in Pick Stage").into(),
                 };
 
-                column![frontier, paused, confirm, round, restarts, timer, agents]
-                    .width(Length::Fill)
+                column![
+                    frontier,
+                    paused,
+                    confirm,
+                    ticks,
+                    round,
+                    restarts,
+                    player_action,
+                    timer,
+                    agents
+                ]
+                .width(Length::Fill)
             }
         });
 

@@ -1,5 +1,6 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -9,6 +10,11 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn from_image(image: &RgbaImage) -> Option<Vec<Option<Self>>> {
+        let ocr = PickStage::get_agent_ocr(image);
+        Self::from_raw_ocr(&ocr)
+    }
+    
     pub fn from_raw_ocr(agents: &[String]) -> Option<Vec<Option<Agent>>> {
         debug_assert!(agents.len() == 6);
 

@@ -1,6 +1,8 @@
-pub mod timer;
-pub mod confirm;
-pub mod pause;
 pub mod agents;
-pub mod frontier;
 pub mod challenge;
+pub mod confirm;
+pub mod frontier;
+pub mod hp;
+pub mod pause;
+pub mod timer;
+pub mod loading;

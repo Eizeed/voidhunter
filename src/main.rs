@@ -4,8 +4,10 @@ use iced::{Element, Subscription, Task};
 mod capture;
 use capture::capture;
 
+mod bitmap;
 mod game_match;
 mod home;
+mod macros;
 mod ocr;
 
 fn main() {
@@ -19,7 +21,7 @@ fn main() {
     iced::application(init, App::update, App::view)
         .title("voidhunter")
         .subscription(App::subscribtion)
-        .window_size((500.0, 500.0))
+        .window_size((800.0, 500.0))
         .run()
         .unwrap();
 }
@@ -62,13 +64,15 @@ impl App {
                 if let Screen::GameMatch(game_match) = &mut self.screen {
                     let action = game_match.update(msg);
 
+                    use game_match::Action;
+
                     match action {
-                        game_match::Action::Run(task) => task.map(Message::GameMatch),
-                        game_match::Action::Home => {
+                        Action::Run(task) => task.map(Message::GameMatch),
+                        Action::Home => {
                             self.screen = Screen::Home(home::Home);
                             Task::none()
                         }
-                        game_match::Action::None => Task::none(),
+                        Action::None => Task::none(),
                     }
                 } else {
                     Task::none()

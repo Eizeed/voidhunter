@@ -1,7 +1,7 @@
 use image::{
     codecs::png::PngEncoder,
     imageops::{contrast, grayscale},
-    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Luma, Rgba,
+    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Luma, Rgba, RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -13,6 +13,16 @@ pub struct Timer {
 }
 
 impl Timer {
+    pub fn ingame_from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = RunStage::get_timer_ocr(image);
+        Timer::from_raw_ocr(&ocr)
+    }
+
+    pub fn res_from_image(image: &RgbaImage) -> Option<Self> {
+        let ocr = TimerStage::get_timer_ocr(image);
+        Timer::from_raw_ocr(&ocr)
+    }
+
     pub fn from_raw_ocr(val: &str) -> Option<Self> {
         let mut iter = val.split(':');
         let hours = iter.next()?.trim().parse::<u16>().ok()?;
@@ -55,21 +65,35 @@ pub struct RunStage;
 impl RunStage {
     pub fn get_timer_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
         const X_OFFSET: u32 = 1634;
-        const Y_OFFSET: u32 = 82;
+        const Y_OFFSET_1: u32 = 82;
+        const Y_OFFSET_2: u32 = 162;
         const WIDTH: u32 = 126;
         const HEIGHT: u32 = 21;
 
-        let timer = image.view(X_OFFSET, Y_OFFSET, WIDTH, HEIGHT).to_image();
+        let normal_timer = image.view(X_OFFSET, Y_OFFSET_1, WIDTH, HEIGHT).to_image();
+        let normal_timer = &contrast(&grayscale(&normal_timer), 200.0);
+        // normal_timer.save("ingame_timer.png").unwrap();
 
-        let timer = &contrast(&grayscale(&timer), 200.0);
-        // timer.pixels()
+        let normal_timer = Self::parse_7_dig(&normal_timer);
+        if let Some(normal_timer) = normal_timer {
+            // println!("returning normal timer");
+            return normal_timer;
+        }
 
-        // timer.save("ingame_timer.png").unwrap();
+        let boss_timer = image.view(X_OFFSET, Y_OFFSET_2, WIDTH, HEIGHT).to_image();
+        let boss_timer = &contrast(&grayscale(&boss_timer), 200.0);
+        // boss_timer.save("boss_timer.png").unwrap();
 
-        Self::parse_7_dig(timer)
+        let boss_timer = Self::parse_7_dig(&boss_timer);
+        if let Some(boss_timer) = boss_timer {
+            // println!("returning boss timer");
+            return boss_timer;
+        }
+
+        return String::new();
     }
 
-    pub fn parse_7_dig(image: &ImageBuffer<Luma<u8>, Vec<u8>>) -> String {
+    pub fn parse_7_dig(image: &ImageBuffer<Luma<u8>, Vec<u8>>) -> Option<String> {
         let mut numbers = String::new();
         let mut segments = Vec::with_capacity(7);
         const WIDTH: u32 = 14;
@@ -101,12 +125,12 @@ impl RunStage {
                             //     left_x,
                             //     y
                             // );
-                            return String::new();
+                            return None;
                         }
                     }
 
                     if image.get_pixel(x + 2, y).0[0] > 0 {
-                        return String::new();
+                        return None;
                     }
 
                     let pixel = image.get_pixel(x, y).0[0];
@@ -126,7 +150,7 @@ impl RunStage {
                             //     x,
                             //     top_y,
                             // );
-                            return String::new();
+                            return None;
                         }
                     }
 
@@ -138,7 +162,7 @@ impl RunStage {
                             //     x,
                             //     y + 2
                             // );
-                            return String::new();
+                            return None;
                         }
                     }
 
@@ -159,12 +183,12 @@ impl RunStage {
                             //     x + 2,
                             //     y
                             // );
-                            return String::new();
+                            return None;
                         }
                     }
 
                     if image.get_pixel(x - 2, y).0[0] > 0 {
-                        return String::new();
+                        return None;
                     }
 
                     let pixel = image.get_pixel(x, y).0[0];
@@ -175,7 +199,7 @@ impl RunStage {
                 let num = parse_segment(seg_slice).map(|n| n.to_string());
 
                 let Some(num) = num else {
-                    return String::new();
+                    return None;
                 };
 
                 numbers.push_str(num.as_str());
@@ -188,7 +212,7 @@ impl RunStage {
             }
         }
 
-        numbers
+        Some(numbers)
     }
 }
 
@@ -254,6 +278,6 @@ mod tests {
     fn parser() {
         let image = image::open("ingame_timer.png").unwrap().to_luma8();
         let res = RunStage::parse_7_dig(&image);
-        println!("{res}");
+        println!("{res:#?}");
     }
 }
