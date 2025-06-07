@@ -31,7 +31,7 @@ impl LoadingOcr {
         const HEIGHT: u32 = 87;
 
         let loading = image.view(X, Y, WIDTH, HEIGHT).to_image();
-        loading.save("loading.png").unwrap();
+        // loading.save("loading.png").unwrap();
 
         let mut buffer = vec![];
         let png_encoder = PngEncoder::new(&mut buffer);
@@ -56,15 +56,33 @@ impl LoadingOcr {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use crate::capture::capture_once;
+
     use super::*;
 
     #[test]
     fn loading() {
-        let image = image::open("loading_screen.png").unwrap();
+        let image = image::open("exit.png").unwrap();
         let mut image = image.as_rgba8().unwrap();
 
         let res = LoadingOcr::get_ocr(&mut image);
         // let res = Hp::from_raw_ocr(res);
+
+        println!("{res:#?}");
+    }
+
+    #[test]
+    fn loading_live() {
+        let buf = Arc::new(Mutex::new(vec![]));
+        capture_once(buf.clone()).unwrap();
+
+        let image_buf = buf.lock().unwrap().clone();
+        let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
+
+        let res = LoadingOcr::get_ocr(&mut image);
+        let res = Loading::from_raw_ocr(res);
 
         println!("{res:#?}");
     }

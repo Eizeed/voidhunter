@@ -1,5 +1,6 @@
 use image::{
-    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
+    codecs::png::PngEncoder, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgba,
+    RgbaImage,
 };
 use tesseract::Tesseract;
 
@@ -11,8 +12,14 @@ impl Pause {
         let ocr = PauseOcr::get_ocr(image);
         Pause::from_raw_ocr(ocr)
     }
-    
+
     pub fn from_raw_ocr((restart, exit): (String, String)) -> Option<Self> {
+        // Edgecase: on shiyu completed there are 2 buttons
+        // to go to next frontier and to exit.
+        if restart.contains("tier") || restart.contains("Next") {
+            return None;
+        };
+
         let mut iter = restart.split_whitespace();
         let restart_res;
 

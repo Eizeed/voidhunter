@@ -25,12 +25,12 @@ pub struct HpOcr;
 impl HpOcr {
     pub fn get_ocr(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> String {
         const X: u32 = 250;
-        const Y: u32 = 85;
+        const Y: u32 = 80;
         const WIDTH: u32 = 90;
-        const HEIGHT: u32 = 16;
+        const HEIGHT: u32 = 27;
 
         let hp_bar = image.view(X, Y, WIDTH, HEIGHT).to_image();
-        hp_bar.save("hp.png").unwrap();
+        // hp_bar.save("hp.png").unwrap();
 
         let mut buffer = vec![];
 
@@ -73,6 +73,7 @@ mod tests {
         let mut image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
 
         let res = HpOcr::get_ocr(&mut image);
+        println!("str: {res}");
         let res = Hp::from_raw_ocr(res);
 
         println!("{res:#?}");

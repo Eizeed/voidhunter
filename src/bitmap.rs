@@ -22,6 +22,7 @@ impl BitmapU16 {
     const CHALLENGES: u16 = 0b1000_0000;
 
     const LOADING: u16 = 0b0001_0000_0000;
+    const BLACK_SCREEN: u16 = 0b0010_0000_0000;
 
     pub fn frontier(&self) -> bool {
         (self.inner & Self::FRONTIER) != 0
@@ -57,6 +58,10 @@ impl BitmapU16 {
 
     pub fn loading(&self) -> bool {
         (self.inner & Self::LOADING) != 0
+    }
+
+    pub fn blackscreen(&self) -> bool {
+        (self.inner & Self::BLACK_SCREEN) != 0
     }
 
     pub fn set_frontier(&mut self, val: bool) {
@@ -121,6 +126,13 @@ impl BitmapU16 {
             self.inner |= Self::LOADING;
         } else {
             self.inner &= !Self::LOADING;
+        }
+    }
+    pub fn set_blackscreen(&mut self, val: bool) {
+        if val {
+            self.inner |= Self::BLACK_SCREEN;
+        } else {
+            self.inner &= !Self::BLACK_SCREEN;
         }
     }
 }

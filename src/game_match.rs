@@ -17,7 +17,7 @@ use crate::{
     capture,
     ocr::{
         agents::Agent, challenge::Challenge, confirm::ConfirmDialog, frontier::Frontier, hp::Hp,
-        loading::Loading, pause::Pause, timer::Timer,
+        is_black_screen, loading::Loading, pause::Pause, timer::Timer,
     },
     spawn_blocking,
 };
@@ -45,6 +45,7 @@ pub enum Message {
     SetLoading(Option<Loading>),
     SetPause(Option<Pause>),
     SetConfirmDialog(Option<ConfirmDialog>),
+    SetBlackscreen(bool),
 
     CheckState,
 
@@ -81,7 +82,6 @@ pub struct GameMatch {
     game: GameState,
 
     player_state: PlayerAction,
-    prev_state: PlayerAction,
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +93,6 @@ pub struct GameState {
     restart_amount: u8,
     is_dirty: bool,
     stage: Stage,
-    next_stage: bool,
     visibility_flags: BitmapU16,
     tick: u32,
 }
@@ -108,7 +107,6 @@ impl GameState {
             restart_amount: 0,
             is_dirty: false,
             stage: Stage::Pick,
-            next_stage: false,
             visibility_flags: 0.into(),
             tick: 0,
         }
@@ -137,7 +135,6 @@ impl GameMatch {
                 match_results: Vec::with_capacity(2),
                 game: GameState::new(),
                 player_state: PlayerAction::None,
-                prev_state: PlayerAction::None,
             },
             Task::done(Message::ScanTick(Instant::now())),
         )
@@ -181,8 +178,6 @@ impl GameMatch {
                 let image = RgbaImage::from_vec(1920, 1080, image_buf).unwrap();
                 let shared_img = Arc::new(image);
 
-                let next_stage = self.game.next_stage.clone();
-
                 let task = match self.game.stage {
                     Stage::Pick => {
                         let img = Arc::clone(&shared_img);
@@ -198,24 +193,16 @@ impl GameMatch {
                         });
 
                         let img = Arc::clone(&shared_img);
-                        let challenges_task = if next_stage {
-                            Task::future(async move {
-                                let challenges = spawn_blocking!(Challenge::from_image(&img));
-                                Message::SetChallenges(challenges)
-                            })
-                        } else {
-                            Task::none()
-                        };
+                        let challenges_task = Task::future(async move {
+                            let challenges = spawn_blocking!(Challenge::from_image(&img));
+                            Message::SetChallenges(challenges)
+                        });
 
                         let img = Arc::clone(&shared_img);
-                        let hp_task = if next_stage {
-                            Task::future(async move {
-                                let challenges = spawn_blocking!(Hp::from_image(&img));
-                                Message::SetHp(challenges)
-                            })
-                        } else {
-                            Task::none()
-                        };
+                        let hp_task = Task::future(async move {
+                            let challenges = spawn_blocking!(Hp::from_image(&img));
+                            Message::SetHp(challenges)
+                        });
 
                         frontier_task
                             .chain(agents_task)
@@ -241,25 +228,24 @@ impl GameMatch {
                             Message::SetLoading(loading)
                         });
 
-                        let pause_task = match half_stage {
-                            HalfStage::Run | HalfStage::Cleared => {
-                                let img = Arc::clone(&shared_img);
-                                Task::future(async move {
-                                    let pause = spawn_blocking!(Pause::from_image(&img));
-                                    Message::SetPause(pause)
-                                })
-                            }
-                            _ => Task::none(),
-                        };
+                        let img = Arc::clone(&shared_img);
+                        let pause_task = Task::future(async move {
+                            let pause = spawn_blocking!(Pause::from_image(&img));
+                            Message::SetPause(pause)
+                        });
 
-                        let confirm_task = match half_stage {
-                            HalfStage::Run | HalfStage::Cleared => {
+                        let img = Arc::clone(&shared_img);
+                        let confirm_task = Task::future(async move {
+                            let confirm_dialog = spawn_blocking!(ConfirmDialog::from_image(&img));
+                            Message::SetConfirmDialog(confirm_dialog)
+                        });
+
+                        let black_screen = match half_stage {
+                            HalfStage::Run => {
                                 let img = Arc::clone(&shared_img);
-                                Task::future(async move {
-                                    let confirm_dialog =
-                                        spawn_blocking!(ConfirmDialog::from_image(&img));
-                                    Message::SetConfirmDialog(confirm_dialog)
-                                })
+                                let all_black = is_black_screen(&img);
+                                // println!("Scanning. Is black_screen: {all_black}");
+                                Task::done(Message::SetBlackscreen(all_black))
                             }
                             _ => Task::none(),
                         };
@@ -270,9 +256,10 @@ impl GameMatch {
                             pause_task,
                             confirm_task,
                             loading_task,
+                            black_screen,
                         ])
                     }
-                    Stage::SecondHalf(ref half_stage) => {
+                    Stage::SecondHalf(_) => {
                         let img = Arc::clone(&shared_img);
                         let ingame_timer_task = Task::future(async move {
                             let ingame_timer = Timer::ingame_from_image(&img);
@@ -291,35 +278,24 @@ impl GameMatch {
                             Message::SetLoading(loading)
                         });
 
-                        let pause_task = match half_stage {
-                            HalfStage::Run | HalfStage::Cleared => {
-                                let img = Arc::clone(&shared_img);
-                                Task::future(async move {
-                                    let pause = spawn_blocking!(Pause::from_image(&img));
-                                    Message::SetPause(pause)
-                                })
-                            }
-                            _ => Task::none(),
-                        };
+                        let img = Arc::clone(&shared_img);
+                        let pause_task = Task::future(async move {
+                            let pause = spawn_blocking!(Pause::from_image(&img));
+                            Message::SetPause(pause)
+                        });
 
-                        let confirm_task = match half_stage {
-                            HalfStage::Run | HalfStage::Cleared => {
-                                let img = Arc::clone(&shared_img);
-                                Task::future(async move {
-                                    let confirm_dialog =
-                                        spawn_blocking!(ConfirmDialog::from_image(&img));
-                                    Message::SetConfirmDialog(confirm_dialog)
-                                })
-                            }
-                            _ => Task::none(),
-                        };
+                        let img = Arc::clone(&shared_img);
+                        let confirm_task = Task::future(async move {
+                            let confirm_dialog = spawn_blocking!(ConfirmDialog::from_image(&img));
+                            Message::SetConfirmDialog(confirm_dialog)
+                        });
 
                         let res_timer_task =
-                            if let Stage::SecondHalf(HalfStage::Cleared) = self.game.stage {
+                            if self.game.stage != Stage::SecondHalf(HalfStage::Prepare) {
                                 let img = Arc::clone(&shared_img);
                                 Task::future(async move {
-                                    let challenges = spawn_blocking!(Timer::res_from_image(&img));
-                                    Message::SetTimer(challenges)
+                                    let res_timer = spawn_blocking!(Timer::res_from_image(&img));
+                                    Message::SetTimer(res_timer)
                                 })
                             } else {
                                 Task::none()
@@ -334,12 +310,15 @@ impl GameMatch {
                             loading_task,
                         ])
                     }
-                    Stage::Finished => Task::done(Message::CheckState)
-                        .chain(Task::done(Message::ScanTick(Instant::now()))),
+                    Stage::Finished => Task::none(),
                     _ => Task::none(),
                 };
 
                 let now = Instant::now();
+
+                if self.game.stage == Stage::SecondHalf(HalfStage::Cleared) {
+                    println!("lollll");
+                }
 
                 Action::Run(
                     task.chain(Task::done(Message::CheckState))
@@ -393,36 +372,40 @@ impl GameMatch {
             }
             Message::SetPause(pause) => {
                 self.game.visibility_flags.set_pause(pause.is_some());
+                if let Some(_) = pause {
+                    self.player_state = PlayerAction::Pause;
+                };
 
                 Action::None
             }
             Message::SetConfirmDialog(confirm) => {
-                // TODO: Make separate flags for exit and restart
                 self.game
                     .visibility_flags
                     .set_confirm_dialog(confirm.is_some());
 
+                if let Some(confirm) = confirm {
+                    match confirm {
+                        ConfirmDialog::Restart => self.player_state = PlayerAction::RestartDialog,
+                        ConfirmDialog::Exit => self.player_state = PlayerAction::ExitDialog,
+                        _ => {}
+                    }
+                };
+
+                Action::None
+            }
+            Message::SetBlackscreen(b) => {
+                self.game.visibility_flags.set_blackscreen(b);
                 Action::None
             }
 
             Message::CheckState => {
-                if self.game.visibility_flags.confirm_dialog() {
-                    self.player_state = PlayerAction::RestartDialog;
-                } else if self.game.visibility_flags.pause() {
-                    self.player_state = PlayerAction::Pause;
-                } else {
-                    if self.game.visibility_flags.hp()
+                if !self.game.visibility_flags.pause()
+                    && !self.game.visibility_flags.confirm_dialog()
+                    && (self.game.visibility_flags.hp()
                         || self.game.visibility_flags.ingame_timer()
-                        || self.game.visibility_flags.res_timer()
-                    {
-                        self.player_state = PlayerAction::None;
-
-                        // Edgecase where player paused just before he cleared the room
-                        // in the second half, so ocr won't be able to capture hp nor timer
-                        if self.game.visibility_flags.res_timer() {
-                            self.game.tick = 18;
-                        }
-                    }
+                        || self.game.visibility_flags.res_timer())
+                {
+                    self.player_state = PlayerAction::None;
                 }
 
                 let transition = self
@@ -434,7 +417,6 @@ impl GameMatch {
             }
 
             Message::ChangeStage(stage) => {
-                self.game.next_stage = false;
                 self.game.stage = stage;
                 self.player_state = PlayerAction::None;
 
@@ -460,12 +442,6 @@ impl GameMatch {
             .color(Color::WHITE);
 
         let col_content = col_content.push(current_stage);
-
-        let change_stage = text(format!("Change state: {:?}", self.game.next_stage))
-            .size(20)
-            .color(Color::WHITE);
-
-        let col_content = col_content.push(change_stage);
 
         let col_content = col_content.push(match self.game.stage {
             Stage::GameOver => {
@@ -529,9 +505,19 @@ impl GameMatch {
                     matches!(&self.player_state, PlayerAction::RestartDialog)
                 ));
                 let round = text(format!("Game {}", self.match_results.len() + 1));
-                let ticks = text(format!("TIcks {}", self.game.tick));
+                let ticks = text(format!("Ticks {}", self.game.tick));
                 let restarts = text(format!("Restarts used: {}", self.game.restart_amount));
                 let player_action = text(format!("Player Action: {:?}", self.player_state));
+                let hp_visible = text(format!("Hp visible: {}", self.game.visibility_flags.hp()));
+                let ingame_timer = text(format!(
+                    "ingame timer visible: {}",
+                    self.game.visibility_flags.ingame_timer()
+                ));
+                let res_timer_visible = text(format!(
+                    "res timer visible: {}",
+                    self.game.visibility_flags.res_timer()
+                ));
+                let res_timer = text(format!("res timer: {:?}", self.game.res_timer));
                 let timer = if let Some(timer) = &self.game.ingame_timer {
                     text(format!("Ingame timer: {}", timer.to_string()))
                         .size(20)
@@ -557,6 +543,10 @@ impl GameMatch {
                     round,
                     restarts,
                     player_action,
+                    hp_visible,
+                    ingame_timer,
+                    res_timer_visible,
+                    res_timer,
                     timer,
                     agents
                 ]
